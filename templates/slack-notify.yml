@@ -1,0 +1,10 @@
+      - name: Slack Notify
+        uses: 8398a7/action-slack@v3
+        continue-on-error: true
+        with:
+          status: ${{ job.status }}
+          author_name: Build Information
+          fields: repo,message,commit,author,job,took
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_NOTIFICATIONS_WEB_HOOK_URL }}
+        if: always()
