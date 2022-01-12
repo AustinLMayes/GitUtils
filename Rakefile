@@ -34,7 +34,7 @@ end
 def push_all(*branches)
   delay = $delays_enabled ? [5, 25] : [0,0]
   branches = branches.shuffle
-  Git.push_branches *branches, ensure_exists: true, delay: delay
+  Git.push_branches *branches, ensure_exists: false, delay: delay
   system "git", "checkout", @current
 end
 
@@ -173,8 +173,6 @@ task push_up: :before do |task, args|
   mco = @current.end_with? "mco"
   mco_name = mco ? @current : @current + "-mco"
   base_name = mco ? @current[0..-5] : @current
-  Git.ensure_exists mco_name
-  Git.ensure_exists base_name
 
   info "Pusing all branches to remote"
   push_all "master", "master-mco", base_name, mco_name
