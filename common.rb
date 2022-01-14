@@ -49,7 +49,7 @@ def wait_range(min, max)
   return if max < 1
   min *= 2 if $extra_slow
   max *= 2 if $extra_slow
-  
+
   random = rand(min..max)
   info "Sleeping for #{random} seconds"
   sleep random
@@ -90,11 +90,11 @@ module Git
     error "Not on expected branch #{branch}! On #{current_branch}" if current_branch.downcase != branch.downcase
   end
 
-  def delete_branches(*branches)
+  def delete_branches(*branches, remote: true)
     info "Deleting #{branches.join(" ")}..."
     branches.shuffle.each do |branch|
       system "git branch -D #{branch}"
-      system "git push origin --delete #{branch}"
+      system "git push origin --delete #{branch}" if remote
       wait_range 3, 6
     end
   end
@@ -116,13 +116,15 @@ module Git
   def act_on_branches(*branches, ensure_exists: true, delay: [0, 0], shuffle: true, &block)
     existing = []
     branches.each do |branch|
-      if system "git rev-parse --verify #{branch}"
-        existing << branch
-      elsif ensure_exists
-        error "Branch #{branch} does not exist in repository!"
-      else
-        warning "Tried to check out #{branch} but it didn't exist!"
-      end
+      existing << branch
+
+      # if system "git rev-parse --verify #{branch}"
+      #   existing << branch
+      # elsif ensure_exists
+      #   error "Branch #{branch} does not exist in repository!"
+      # else
+      #   warning "Tried to check out #{branch} but it didn't exist!"
+      # end
     end
 
     branches = branches.shuffle if shuffle
@@ -130,9 +132,10 @@ module Git
     existing.each do |branch|
       info "Checking out #{branch}..."
       system "git", "checkout", branch
-      ensure_branch branch
-      wait_range *delay
-      block.call branch
+      if current_branch.downcase == branch.downcase
+        wait_range *delay
+        block.call branch
+      end
     end
   end
 
