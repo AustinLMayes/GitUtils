@@ -45,7 +45,7 @@ task pull_base: :before do |task, args|
 end
 
 def pull_base
-  Git.pull_branches "master", "master-mco", "production", "production-mco", ensure_exists: false
+  Git.pull_branches "master", "master-mco", "production", "production-mco", "gamedevnet", "gamedevnet-mco", ensure_exists: false
 end
 
 desc "Make an MCO version of the current branch"

@@ -95,6 +95,69 @@ end
 
 require 'find'
 
+def pull_all(root_path)
+  Find.find(fix_path(root_path)).each do |file|
+    if File.directory?(file) && File.exists?("#{file}/.git")
+      Dir.chdir(file) do
+        origin_url = %x(git config --get remote.origin.url)
+
+        path = fix_path file
+        if origin_url.downcase.include?("github")
+          system "git", "checkout", "dev"
+          system "git", "checkout", "master"
+          system "git", "checkout", "main"
+          system "git", "checkout", "production"
+          desc = "[" + file.gsub("/Users/austinmayes//Projects/Java/Ziax/", "") + "] "
+          Git.pull_branches "master", "master-mco", "production", "production-mco", "dev", ensure_exists: false
+          has_prod = Git.branch_exists("production")
+          has_master = Git.branch_exists("master")
+          has_main = Git.branch_exists("main")
+          branch = "production"
+          if has_main && !has_master && !has_prod
+            branch =  "main"
+          elsif has_master && !has_prod
+            branch =  "master"
+          end
+          system "git", "checkout", branch
+        end
+      end
+    end
+  end
+end
+
+def to_gamedev(root_path)
+  to_move = []
+  root_path = fix_path(root_path)
+  Find.find(root_path).each do |file|
+    if File.directory?(file) && File.exists?("#{file}/.git")
+      Dir.chdir(file) do
+        origin_url = %x(git config --get remote.origin.url)
+
+        path = fix_path file
+        if origin_url.downcase.include?("github") && !path.include?("General")
+          system "git", "reset", "--hard"
+          system "git", "checkout", "gamedevnet"
+          desc = "[" + file.gsub("/Users/austinmayes//Projects/Java/Ziax/", "") + "] "
+          if Git.branch_exists("gamedevnet")
+            system "git", "reset", "--hard"
+            system "git", "checkout", "gamedevnet"
+            to_move << path
+          end
+        end
+      end
+    end
+  end
+  unless to_move.empty?
+    system "rm", "-rf", root_path.gsub("/Ziax/", "/Ziax GameDev/")
+  end
+  to_move.each do |path|
+    base = path.gsub("/Ziax/", "/Ziax GameDev/")
+    base = base.slice(0..(base.rindex('/')))
+    system "mkdir", "-p", base
+    system "cp", "-r", path, path.gsub("/Ziax/", "/Ziax GameDev/")
+  end
+end
+
 def do_slack(root_path)
   text = File.read(File.join(File.dirname(__FILE__), "templates/slack-notify.yml"))
   Find.find(fix_path(root_path)).each do |file|
@@ -150,11 +213,13 @@ end
 #to_github "~/Projects/Java/Ziax/Workspace/Games/BlockWars/BlockWarsBridges", "CoolUtils", ["master", "dev"]
 #make_workflows "~/Projects/Java/Ziax/Workspace/Games/Featured/Paintball/", "Paintball", "arcade", "Paintball", [["production", "JAVA"]]
 #slack_notify "~/Projects/Java/Ziax/Workspace/Games/Featured/Paintball/", [["production", "JAVA"]]
+#do_slack("~/Projects/Java/Ziax/")
 
 #wait_range 60, 240
 
 begin
-  do_slack("~/Projects/Java/Ziax/")
+  pull_all("~/Projects/Java/Ziax/")
+  #to_gamedev("~/Projects/Java/Ziax/")
 ensure
   puts "Finished! Made #{@res.length} PRs"
   puts @res
