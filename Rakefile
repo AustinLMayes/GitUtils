@@ -18,6 +18,7 @@ task :before do |task, args|
   info ($delays_enabled ? "" : "NOT ") + "Using Delays!"
   $extra_slow = ENV["GUTILS_EXTRA_SLOW"] == "true"
   info "Using double delay times" if $extra_slow
+  $gamedev = ENV["GAME_FRAMEWORK"] == "true"
 end
 
 desc "Pull all of the selected branches"
@@ -180,20 +181,33 @@ end
 
 desc "Make a PR from the current branch"
 task make_pr: :before do |task, args|
-  info "@here " + GitHub.make_pr(args.extras[0], suffix: "")
+  make_prs(args.extras[0], false, (!args.extras[1].nil? && args.extras[1] == "true"))
 end
 
 desc "Make PRs from the current and MCO branches"
 task make_prs: :before do |task, args|
   error "You can only run this on non-mco branches!" if @current.end_with? "mco"
-  Git.ensure_exists @current + "-mco"
+  make_prs(args.extras[0], true, (!args.extras[1].nil? && args.extras[1] == "true"))
+end
+
+def make_prs(title, multi, slack)
   res = "@here "
-  res << GitHub.make_pr(args.extras[0])
-  wait_range 30, 60 if $delays_enabled
-  system "git", "checkout", @current + "-mco"
-  res << GitHub.make_pr(args.extras[0])
+  if multi
+    Git.ensure_exists @current + "-mco"
+    res << GitHub.make_pr(title)
+    wait_range 30, 60 if $delays_enabled
+    system "git", "checkout", @current + "-mco"
+    res << GitHub.make_pr(title)
+  else
+    res << GitHub.make_pr(title, suffix: "")
+  end
+
   system "git", "checkout", @current
-  info res
+  if slack
+    Slack.send_message("#development-prs", res.gsub("\n", " "))
+  else
+    info res
+  end
 end
 
 desc "Make a new branch based off of production"
