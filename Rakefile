@@ -18,7 +18,6 @@ task :before do |task, args|
   info ($delays_enabled ? "" : "NOT ") + "Using Delays!"
   $extra_slow = ENV["GUTILS_EXTRA_SLOW"] == "true"
   info "Using double delay times" if $extra_slow
-  $gamedev = ENV["GAME_FRAMEWORK"] == "true"
 end
 
 desc "Pull all of the selected branches"
@@ -46,7 +45,14 @@ task pull_base: :before do |task, args|
 end
 
 def pull_base
-  Git.pull_branches "master", "master-mco", "production", "production-mco", "gamedevnet", "gamedevnet-mco", ensure_exists: false
+  branches = ["gamedevnet", "gamedevnet-mco"]
+  %w(master production).each do |branch|
+    branches << branch
+    branches << branch + "-mco"
+    branches << branch + "-gameframework"
+    branches << branch + "-mco-gameframework"
+  end
+  Git.pull_branches *branches, ensure_exists: false
 end
 
 desc "Make an MCO version of the current branch"
@@ -98,6 +104,24 @@ def cherry_mco
   Git.ensure_branch mco_name
   info "Cherry-picking #{commit} from #{@current} to #{mco_name}"
   return system "git", "cherry-pick", commit, "--no-edit"
+end
+
+desc "Merge the current branch to gamedevnet"
+task to_gamedev: :before do |task, args|
+  if to_gamedev
+    system "git", "checkout", @current
+  else
+    error "merge failed"
+  end
+end
+
+def to_gamedev
+  current  = Git.current_branch
+  target = current.end_with?("mco") ? "gamedevnet-mco" : "gamedevnet"
+  system "git", "checkout", target
+  Git.ensure_branch target
+  info "Merging #{current} into #{target}"
+  return system "git", "merge", current, "--no-edit"
 end
 
 desc "Merge the current branch to master"
@@ -176,7 +200,7 @@ task push_up: :before do |task, args|
   base_name = mco ? @current[0..-5] : @current
 
   info "Pusing all branches to remote"
-  push_all "master", "master-mco", base_name, mco_name
+  push_all "gamedevnet", "gamedevnet-mco", "master", "master-mco", base_name, mco_name
 end
 
 desc "Make a PR from the current branch"
