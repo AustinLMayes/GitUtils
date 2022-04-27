@@ -26,6 +26,27 @@ task pull_all: :before do |task, args|
   system "git", "checkout", @current
 end
 
+desc "Run a command on the selected Git branches"
+task act_on_all: :before do |task, args|
+  command = args.extras[0]
+  args.extras.drop(1)
+  act_on_all(command, *args.extras)
+end
+
+desc "Run a command on the base branches"
+task act_on_base: :before do |task, args|
+  command = args.extras[0]
+  act_on_all(command, *base_branches)
+end
+
+def act_on_all(command, *branches)
+  Git.act_on_branches *branches, ensure_exists: true, delay: [0,0] do |branch|
+    info "Executing #{command} on #{branch}"
+    system command
+  end
+  system "git", "checkout", @current
+end
+
 desc "Push all of the selected branches"
 task push_all: :before do |task, args|
   push_all *args.extras
@@ -44,15 +65,19 @@ task pull_base: :before do |task, args|
   system "git", "checkout", @current
 end
 
-def pull_base
+def base_branches
   branches = ["gamedevnet", "gamedevnet-mco"]
   %w(master production).each do |branch|
     branches << branch
     branches << branch + "-mco"
     branches << branch + "-gameframework"
-    branches << branch + "-mco-gameframework"
+    branches << branch + "-gameframework-mco"
   end
-  Git.pull_branches *branches, ensure_exists: false
+  branches
+end
+
+def pull_base
+  Git.pull_branches *base_branches, ensure_exists: false
 end
 
 desc "Make an MCO version of the current branch"
