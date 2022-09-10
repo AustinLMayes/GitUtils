@@ -30,8 +30,7 @@ end
 desc "Run a command on the selected Git branches"
 task act_on_all: :before do |task, args|
   command = args.extras[0]
-  args.extras.drop(1)
-  act_on_all(command, *args.extras)
+  act_on_all(command, *args.extras.drop(1))
 end
 
 desc "Run a command on the base branches"

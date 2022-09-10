@@ -1,4 +1,5 @@
 require_relative 'common'
+require "json"
 
 desc "Wait between x and x seconds"
 task :wait do |task, args|
@@ -29,8 +30,7 @@ end
 desc "Run a command on the selected Git branches"
 task act_on_all: :before do |task, args|
   command = args.extras[0]
-  args.extras.drop(1)
-  act_on_all(command, *args.extras)
+  act_on_all(command, *args.extras.drop(1))
 end
 
 desc "Run a command on the base branches"
@@ -218,6 +218,38 @@ def deploy(verb, &block)
   end
 end
 
+desc "Deploy Java and MCO to their respective GameDev branches"
+task deploy_gamedev: :before do |task, args|
+  mco = @current.end_with? "mco"
+  warning "Running on MCO branch! Skipping java merge!" if mco
+  mco_name = mco ? @current : @current + "-mco"
+  base_name = mco ? @current[0..-5] : @current
+  Git.ensure_exists mco_name
+  Git.ensure_exists base_name
+  unless mco
+    if to_gamedev
+      info "Merged #{base_name} to gamedevnet"
+      system "git", "checkout", base_name
+      wait_range 5, 20 if $delays_enabled
+    else
+      error "Merge to master failed"
+    end
+  end
+
+  system "git", "checkout", mco_name
+
+  if to_gamedev
+    info "Merged #{mco_name} to gamedevnet-mco"
+    system "git", "checkout", base_name
+    wait_range 5, 25 if $delays_enabled
+    info "Pusing all branches to remote"
+    push_all "gamedevnet", "gamedevnet-mco", base_name, mco_name
+    info "Pushed all branches to remote"
+  else
+    error "Merge to gamedevnet-mco failed"
+  end
+end
+
 desc "Push master,master-mco,curbranch, and curbranch-mco"
 task push_up: :before do |task, args|
   mco = @current.end_with? "mco"
@@ -275,4 +307,39 @@ def make_branch(name, base)
   name = "austin/" + name
   info "Creating #{name} based off of #{base}"
   system "git", "go", name
+end
+
+desc "Deploy a set of branches in order"
+task :deploy_in_order do |task, args|
+  error "You must specify at least two branches" if args.extras.length < 2
+  repos = []
+  args.extras.each do |arg|
+    repos << [arg.split(":")[0],arg.split(":")[1], arg.split(":")[2]]
+  end
+  str = "The"
+  repos[1..-1].each do |repo|
+    str += " #{repo[1]} branch of #{repo[0]} and"
+  end
+  str = str[0..-4]
+  str += "will be auto-merged after the #{repos[0][1]} branch of #{repos[0][0]} is finished building"
+  info str
+  main_repo = repos[0]
+  dependants = repos[1..-1]
+  if system "gh pr merge #{main_repo[1]} --repo=teamziax/#{main_repo[0]} -d -m"
+    wait_range(5,5)
+    runner_id = JSON.parse(`gh run list -L 1 --json databaseId -b #{main_repo[2]} --repo=teamziax/#{main_repo[0]}`)[0]['databaseId']
+    if system "gh run watch #{runner_id} --repo=teamziax/#{main_repo[0]} --exit-status"
+      dependants.each do |repo|
+        if system "gh pr merge #{repo[1]} --repo=teamziax/#{repo[0]} -d -m"
+          info "Merged PR for #{repo[0]}"
+        else
+          error "Failed to merge PR for #{repo[0]}"
+        end
+      end
+    else
+      error "Run failed!"
+    end
+  else
+    error "Failed to merge main PR!"
+  end
 end
