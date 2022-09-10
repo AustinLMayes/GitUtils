@@ -65,17 +65,6 @@ task pull_base: :before do |task, args|
   system "git", "checkout", @current
 end
 
-def base_branches
-  branches = ["gamedevnet", "gamedevnet-mco"]
-  %w(master production).each do |branch|
-    branches << branch
-    branches << branch + "-mco"
-    branches << branch + "-gameframework"
-    branches << branch + "-gameframework-mco"
-  end
-  branches
-end
-
 def pull_base
   Git.pull_branches *base_branches, ensure_exists: false
 end

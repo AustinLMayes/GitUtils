@@ -22,8 +22,8 @@ module Ansi
     end
 end
 
-def info(msg)
-    puts "#{Ansi.green "[INFO]"} #{msg}"
+def info(*msg)
+    puts "#{Ansi.green "[INFO]"} #{msg.join(" ")}"
 end
 
 def warning(msg)
@@ -53,6 +53,18 @@ def wait_range(min, max)
   random = rand(min..max)
   info "Sleeping for #{random} seconds"
   sleep random
+end
+
+def base_branches
+  branches = ["gamedevnet", "gamedevnet-mco", "main", "dev"]
+  %w(master production).each do |branch|
+    branches << branch
+    branches << branch + "-mco"
+    branches << branch + "-gameframework"
+    branches << branch + "-gameframework-mco"
+    branches << branch + "-1.19"
+  end
+  branches
 end
 
 module GitHub

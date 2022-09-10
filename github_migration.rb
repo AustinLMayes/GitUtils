@@ -1,4 +1,5 @@
 require 'rake'
+require 'fileutils'
 require_relative 'common'
 
 @res = []
@@ -95,66 +96,67 @@ end
 
 require 'find'
 
-def pull_all(root_path)
+def act_on_repos(root_path, &block)
   Find.find(fix_path(root_path)).each do |file|
     if File.directory?(file) && File.exists?("#{file}/.git")
       Dir.chdir(file) do
         origin_url = %x(git config --get remote.origin.url)
 
-        path = fix_path file
         if origin_url.downcase.include?("github")
-          system "git", "checkout", "dev"
-          system "git", "checkout", "master"
-          system "git", "checkout", "main"
-          system "git", "checkout", "production"
-          desc = "[" + file.gsub("/Users/austinmayes//Projects/Java/Ziax/", "") + "] "
-          Git.pull_branches "master", "master-mco", "production", "production-mco", "dev", ensure_exists: false
-          has_prod = Git.branch_exists("production")
-          has_master = Git.branch_exists("master")
-          has_main = Git.branch_exists("main")
-          branch = "production"
-          if has_main && !has_master && !has_prod
-            branch =  "main"
-          elsif has_master && !has_prod
-            branch =  "master"
-          end
-          system "git", "checkout", branch
+          info "Performing action on " + file
+          block.call
+        else
+          warning "Not acting on #{file} since it is not from GitHub"
         end
       end
     end
   end
 end
 
-def to_gamedev(root_path)
-  to_move = []
-  root_path = fix_path(root_path)
-  Find.find(root_path).each do |file|
-    if File.directory?(file) && File.exists?("#{file}/.git")
-      Dir.chdir(file) do
-        origin_url = %x(git config --get remote.origin.url)
+def cleanup(root_path)
+  act_on_repos(root_path) do
+    system "bash /Users/austinmayes/Projects/Ruby/GitUtils/clean.sh"
+  end
+end
 
-        path = fix_path file
-        if origin_url.downcase.include?("github") && !path.include?("General")
-          system "git", "reset", "--hard"
-          system "git", "checkout", "gamedevnet"
-          desc = "[" + file.gsub("/Users/austinmayes//Projects/Java/Ziax/", "") + "] "
-          if Git.branch_exists("gamedevnet")
-            system "git", "reset", "--hard"
-            system "git", "checkout", "gamedevnet"
-            to_move << path
-          end
-        end
-      end
+def pull_all(root_path)
+  act_on_repos(root_path) do
+    system "git stash"
+    cur = Git.current_branch
+    Git.pull_branches *base_branches, ensure_exists: false
+    system "git", "checkout", cur
+    system "git stash pop"
+  end
+end
+
+def copy_if_has_branch(root_path, branch, dest_path)
+  to_move = {}
+  root_path = fix_path(root_path)
+  dest_path = fix_path(dest_path)
+  info root_path
+  info dest_path
+  act_on_repos(root_path) do
+    system "git stash"
+    cur = Git.current_branch
+    system "git", "reset", "--hard"
+    system "git", "checkout", branch
+    if Git.branch_exists(branch)
+      system "git", "reset", "--hard"
+      system "git", "checkout", branch
+      to_move[Dir.pwd] = cur
     end
   end
   unless to_move.empty?
-    system "rm", "-rf", root_path.gsub("/Ziax/", "/Ziax GameDev/")
+    FileUtils.rm_rf dest_path
   end
-  to_move.each do |path|
-    base = path.gsub("/Ziax/", "/Ziax GameDev/")
-    base = base.slice(0..(base.rindex('/')))
-    system "mkdir", "-p", base
-    system "cp", "-r", path, path.gsub("/Ziax/", "/Ziax GameDev/")
+  to_move.each do |path, branch|
+    FileUtils.mkdir_p path.gsub(root_path, dest_path)
+
+    FileUtils.cp_r path + "/", path.gsub(root_path, dest_path)
+    Dir.chdir(path) do
+      system "git", "checkout", branch
+      system "git stash pop"
+    end
   end
 end
 
@@ -218,8 +220,9 @@ end
 #wait_range 60, 240
 
 begin
-  pull_all("~/Projects/Java/Ziax/")
-  #to_gamedev("~/Projects/Java/Ziax/")
+  # cleanup("~/Projects/Java/Ziax/")
+  # cleanup("~/Projects/Java/Ziax GameDev/")
+  copy_if_has_branch("~Projects/Java/Ziax GameDev/", "master-1.19", "~Projects/Java/Ziax 1.19/")
 ensure
   puts "Finished! Made #{@res.length} PRs"
   puts @res
