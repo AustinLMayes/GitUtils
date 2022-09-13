@@ -119,6 +119,28 @@ def cleanup(root_path)
   end
 end
 
+def go_to_base(root_path)
+  gamedev = root_path.include? "GameDev"
+  one_nineteen = root_path.include? "1.19"
+  branches = ["main", "master", "production"]
+  branches << "gamedevnet" if gamedev
+  branches << "production-gameframework" if gamedev
+  branches << "master-1.19" if one_nineteen
+  act_on_repos(root_path) do
+    system "git stash"
+    found = false
+    branches.reverse.each do |branch|
+      info "Checking " + branch
+      if Git.branch_exists branch
+        system "git checkout " + branch
+        found = true
+        break
+      end
+    end
+    raise "Cannot checkout base branch" unless found
+  end
+end
+
 def pull_all(root_path)
   act_on_repos(root_path) do
     system "git stash"
@@ -222,7 +244,10 @@ end
 begin
   # cleanup("~/Projects/Java/Ziax/")
   # cleanup("~/Projects/Java/Ziax GameDev/")
-  copy_if_has_branch("~Projects/Java/Ziax GameDev/", "master-1.19", "~Projects/Java/Ziax 1.19/")
+  # copy_if_has_branch("~Projects/Java/Ziax GameDev/", "master-1.19", "~Projects/Java/Ziax 1.19/")
+  go_to_base("~/Projects/Java/Ziax/")
+  go_to_base("~/Projects/Java/Ziax GameDev/")
+  go_to_base("~/Projects/Java/Ziax 1.19/")
 ensure
   puts "Finished! Made #{@res.length} PRs"
   puts @res
