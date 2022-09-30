@@ -158,6 +158,33 @@ module Git
   def branch_exists(branch)
     system "git rev-parse --verify #{branch}"
   end
+
+  def nth_commit_sha(offset)
+    `git log --reverse -n#{offset} --pretty="%H" | head -n1`.strip
+  end
+
+  def commits_after(date)
+    `git log --reverse --since="#{date}" --pretty="%H" origin/#{current_branch}..#{current_branch}`.split("\n")
+  end
+
+  def last_pushed_date
+    DateTime.parse(`git log --pretty="%aD" origin/#{current_branch} | head -n1`.strip)
+  end
+
+  def lines_changed(sha)
+    out = `git show #{sha} --oneline --numstat`.strip
+    count = 0
+    out.split("\n")[1..-1].each do |l|
+      l.split(' ').each do |part|
+        begin
+          count += part.strip.to_i
+        rescue => exception
+          break
+        end
+      end
+    end
+    count
+  end
 end
 
 module AppleScript
