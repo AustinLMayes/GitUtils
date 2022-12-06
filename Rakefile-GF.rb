@@ -1,4 +1,4 @@
-require_relative 'common'
+require 'common'
 
 desc "Wait between x and x seconds"
 task :wait do |task, args|

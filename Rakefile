@@ -1,4 +1,4 @@
-require_relative 'common'
+require 'common'
 require "json"
 require 'active_support/time'
 
@@ -345,7 +345,7 @@ task spread_commits: :before do |task, args|
     changes = Git.lines_changed sha
     data[sha] = changes
   end
-  spread(data, time, Time.now - offset - spread)
+  spread(data, time, Time.now - offset - time)
 end
 
 desc "Spread out all commits from today over X hours"
@@ -360,6 +360,7 @@ task spread_today: :before do |task, args|
     changes *= rand(0.08..1).ceil if commits.count > 20
     add = (changes.to_f / 7.to_f).ceil
     add += (changes * multiplier).ceil if changes > 75
+    add += rand(2..6).minutes # Deploy time
     time += add.minutes
     data[sha] = changes
   end
@@ -381,12 +382,13 @@ task spread_today: :before do |task, args|
       break
     end
     if base_under_min
-      start += 1.minute
+      start += 1.seconds
     elsif start_over_max
-      start -= 1.minute
+      start -= 1.seconds
     elsif total_over_max
-      time -= 1.minutes
+      time -= 1.seconds
     end
+    puts "Check: BUM #{base_under_min} SOM #{start_over_max} TOM #{total_over_max} time #{time}"
   end
   spread(data, time, start)
 end
@@ -411,7 +413,6 @@ def spread(commits, spread, start_at)
         export GIT_COMMITTER_DATE=\"#{commit_at}\"
     fi"
   end
-  FileUtils.rm_rf(Dir.pwd + "/.git/refs/original/")
-  system "FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch --env-filter '#{conditions}' HEAD~#{commits.keys.count}..HEAD"
+  system "FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --env-filter '#{conditions}' HEAD~#{commits.keys.count}..HEAD"
   info "Spread out commits"
 end
