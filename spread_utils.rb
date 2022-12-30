@@ -2,7 +2,7 @@ require 'common'
 require 'active_support/time'
 
 desc "Spread out all unpushed commits over a given time period"
-task spread_unpushed: :before do |task, args|
+task :spread_unpushed do |task, args|
   time = args.extras[0].to_i.hours
   dirs = []
   dirs << Dir.pwd if args.extras[2].nil?
@@ -13,29 +13,8 @@ task spread_unpushed: :before do |task, args|
   spread(data, time, Time.now - offset - time)
 end
 
-desc "Create X random git commits of different sizes and clean up"
-task random_commits: :before do |task, args|
-  count = args.extras[0].to_i
-  count.times do
-    size = rand(1..100)
-    info "Creating a commit of size #{size}"
-    # Create a file of the given lines changed
-    File.open("random.txt", "w") do |f|
-      size.times do
-        f.puts "Random line"
-      end
-    end
-    system "git", "add", "."
-    system "git", "commit", "-m", "Random commit of size #{size}", "--allow-empty"
-  end
-  # Clean up
-  system "rm", "random.txt"
-  system "git", "add", "."
-  system "git", "commit", "-m", "Clean up", "--allow-empty"
-end
-
 desc "Reset repos to the latest commit from remote"
-task reset: :before do |task, args|
+task :reset do |task, args|
   dirs = []
   dirs << Dir.pwd if args.extras[0].nil?
   dirs += args.extras[0..-1] unless args.extras[0].nil?
@@ -50,7 +29,7 @@ task reset: :before do |task, args|
 end
 
 desc "Spread out all commits from today"
-task spread_today: :before do |task, args|
+task :spread_today do |task, args|
   dirs = []
   dirs << Dir.pwd if args.extras[0].nil?
   dirs += args.extras[0..-1] unless args.extras[0].nil?
@@ -100,7 +79,7 @@ task spread_today: :before do |task, args|
 end
 
 def fix_relative_dirs(dirs)
-  if dirs == ["*"]
+  if dirs == ["a"]
     # Treat glob as parent path starting at "Ziax"
     # Walk up Dir.pwd until we find "Ziax*" and set that as the base, then find all dirs with a .git folder
     dirs = []
@@ -115,7 +94,6 @@ def fix_relative_dirs(dirs)
       end
     end
   end
-  puts dirs
   dirs.map do |dir|
     if dir.start_with?(".")
       dir = File.expand_path(dir)
@@ -123,6 +101,7 @@ def fix_relative_dirs(dirs)
     if dir.start_with?("~")
       dir = File.expand_path(dir)
     end
+    Git.ensure_git dir
     dir
   end
 end
