@@ -78,6 +78,35 @@ task :spread_today do |task, args|
   spread(data, time, start)
 end
 
+PUSH_ORDER = []
+
+desc "Push all repos in order, waiting for each to finish building before pushing the next"
+task :push do |task, args|
+    dirs = []
+    dirs << Dir.pwd if args.extras[0].nil?
+    dirs += args.extras[0..-1] unless args.extras[0].nil?
+    dirs = fix_relative_dirs dirs
+    sorted = []
+    PUSH_ORDER.each do |dir|
+        sorted << dir if dirs.include?(dir)
+        dirs.delete(dir)
+    end
+    dir_string = dirs.map { |dir| dir.split("/").last }.join(", ")
+    error "Directories: #{dir_string} not found in push order" if dirs.count > 0
+    sorted.each do |dir|
+        Dir.chdir(dir) do
+            info "Pushing #{dir}"
+            system "git", "push"
+            branch = Git.current_branch
+            repo = Git.repo_name
+            org = Git.repo_org
+            sleep 20
+            runner_id = JSON.parse(`gh run list -L 1 --json databaseId -b #{branch} --repo=#{org}/#{repo}`)[0]['databaseId']
+            raise "Run failed" unless system "gh run watch #{runner_id} --repo=#{org}/#{repo} --exit-status"
+        end
+    end
+end
+
 def fix_relative_dirs(dirs)
   if dirs == ["a"]
     # Treat glob as parent path starting at "Ziax"
