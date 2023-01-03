@@ -28,6 +28,15 @@ task pull_all: :before do |task, args|
   system "git", "checkout", @current
 end
 
+desc "Run git pull in the selected directories"
+task :pull_dirs do |task, args|
+  FileUtils.act_on_dirs(FileUtils.parse_args(args, 0)) do |dir|
+    info "Pulling #{dir}"
+    Git.safe_checkout *root_branches
+    system "git", "pull"
+  end
+end
+
 desc "Run a command on the selected Git branches"
 task act_on_all: :before do |task, args|
   command = args.extras[0]

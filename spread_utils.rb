@@ -4,9 +4,7 @@ require 'active_support/time'
 desc "Spread out all unpushed commits over a given time period"
 task :spread_unpushed do |task, args|
     time = TimeUtils.parse_time(args.extras[0])
-    dirs = []
-    dirs << Dir.pwd if args.extras[2].nil?
-    dirs += args.extras[2..-1] unless args.extras[2].nil?
+    dirs = FileUtils.parse_args(args, 2)
     offset = 0
     offset = TimeUtils.parse_time(args.extras[1]) unless args.extras[1].nil?
     data = gather_commits(dirs)
@@ -15,10 +13,7 @@ end
 
 desc "Reset repos to the latest commit from remote"
 task :reset do |task, args|
-  dirs = []
-  dirs << Dir.pwd if args.extras[0].nil?
-  dirs += args.extras[0..-1] unless args.extras[0].nil?
-  dirs = fix_relative_dirs dirs
+  dirs = FileUtils.parse_args(args, 0)
   dirs.each do |dir|
     Dir.chdir(dir) do
       system "git", "fetch", "--all"
@@ -35,10 +30,7 @@ PUSH_ORDER = [
 
 desc "Push all repos in order, waiting for each to finish building before pushing the next"
 task :push do |task, args|
-    dirs = []
-    dirs << Dir.pwd if args.extras[0].nil?
-    dirs += args.extras[0..-1] unless args.extras[0].nil?
-    dirs = fix_relative_dirs dirs
+    dirs = FileUtils.parse_args(args, 0)
     sorted = []
     PUSH_ORDER.each do |dir|
         sorted << dir if dirs.include?(dir)
@@ -60,36 +52,8 @@ task :push do |task, args|
     end
 end
 
-def fix_relative_dirs(dirs)
-  if dirs == ["a"]
-    # Treat glob as parent path starting at "Ziax"
-    # Walk up Dir.pwd until we find "Ziax*" and set that as the base, then find all dirs with a .git folder
-    dirs = []
-    Dir.chdir(Dir.pwd) do
-      while !Dir.pwd.split("/").last.start_with?("Ziax") && Dir.pwd != "/"
-        Dir.chdir("..")
-      end
-      base = Dir.pwd
-      Dir.glob("**/**/.git").each do |dir|
-        next if dir.include?("/work/") # Spigot
-        dirs << base + "/" + File.dirname(dir)
-      end
-    end
-  end
-  dirs.map do |dir|
-    if dir.start_with?(".")
-      dir = File.expand_path(dir)
-    end
-    if dir.start_with?("~")
-      dir = File.expand_path(dir)
-    end
-    Git.ensure_git dir
-    dir
-  end
-end
-
 def gather_commits(dirs, beg=nil)
-  dirs = fix_relative_dirs(dirs)
+  dirs = FileUtils.fix_relative_dirs(dirs)
   count_by_dir = {}
   dirs_index = 0
   data = []
