@@ -25,11 +25,41 @@ end
 
 PUSH_ORDER = [
     "BotsBootstrap", "SentinelService",
-    "AnticheatBot", "CubeBot", "LeaderboardBot", "NetworkControl", "NickService", "PurchaseProcessor", "ScheduledServicesBot", "StaffChatSlackBridgeBot", "Steve", "VoteBot", "WebsiteRegisterBot"
+    "AnticheatBot", "CubeBot", "LeaderboardBot", "NetworkControl", "NickService", "PurchaseProcessor", "ScheduledServicesBot", "StaffChatSlackBridgeBot", "Steve", "VoteBot", "WebsiteRegisterBot", "QueueBot"
 ]
 
 desc "Push all repos in order, waiting for each to finish building before pushing the next"
 task :push do |task, args|
+    dirs = FileUtils.parse_args(args, 0, 0)
+    sorted = []
+    if args.extras[1].nil?
+        PUSH_ORDER.each do |dir|
+            sorted << dir if dirs.include?(dir)
+            dirs.delete(dir)
+        end
+        dir_string = dirs.map { |dir| dir.split("/").last }.join(", ")
+        error "Directories: #{dir_string} not found in push order" if dirs.count > 0
+    else
+        sorted = dirs
+        sorted.delete_if { |dir| !args.extras[1..-1].include?(dir.split("/").last) }
+        sorted.sort_by! { |dir| args.extras[1..-1].index(dir.split("/").last) }
+    end
+    sorted.each do |dir|
+        Dir.chdir(dir) do
+            info "Pushing #{dir}"
+            next unless Git.push
+            branch = Git.current_branch
+            repo = Git.repo_name
+            org = Git.repo_org
+            sleep 20
+            runner_id = JSON.parse(`gh run list -L 1 --json databaseId -b #{branch} --repo=#{org}/#{repo}`)[0]['databaseId']
+            raise "Run failed" unless system "gh run watch #{runner_id} --repo=#{org}/#{repo} --exit-status"
+        end
+    end
+end
+
+desc "Push all repos in order, waiting for each to finish building before pushing the next"
+task :push_run do |task, args|
     dirs = FileUtils.parse_args(args, 0)
     sorted = []
     PUSH_ORDER.each do |dir|
@@ -41,13 +71,65 @@ task :push do |task, args|
     sorted.each do |dir|
         Dir.chdir(dir) do
             info "Pushing #{dir}"
-            next unless Git.push
             branch = Git.current_branch
             repo = Git.repo_name
             org = Git.repo_org
-            sleep 20
+            if Git.push
+                sleep 20
+                runner_id = JSON.parse(`gh run list -L 1 --json databaseId -b #{branch} --repo=#{org}/#{repo}`)[0]['databaseId']
+                raise "Run failed" unless system "gh run watch #{runner_id} --repo=#{org}/#{repo} --exit-status"
+            else
+                runner_id = JSON.parse(`gh run list -L 1 --json databaseId -b #{branch} --repo=#{org}/#{repo}`)[0]['databaseId']
+                if system "gh run rerun #{runner_id} --repo=#{org}/#{repo}"
+                    sleep 20
+                    runner_id = JSON.parse(`gh run list -L 1 --json databaseId -b #{branch} --repo=#{org}/#{repo}`)[0]['databaseId']
+                    raise "Run failed" unless system "gh run watch #{runner_id} --repo=#{org}/#{repo} --exit-status"
+                end
+            end
+        end
+    end
+end
+
+desc "Rerun failed jobs for a set of repos, waiting for each to finish in order"
+task :rerun do |task, args|
+    dirs = FileUtils.parse_args(args, 0)
+    sorted = []
+    PUSH_ORDER.each do |dir|
+        sorted << dir if dirs.include?(dir)
+        dirs.delete(dir)
+    end
+    dir_string = dirs.map { |dir| dir.split("/").last }.join(", ")
+    error "Directories: #{dir_string} not found in push order" if dirs.count > 0
+    sorted.each do |dir|
+        Dir.chdir(dir) do
+            info "Pushing #{dir}"
+            branch = Git.current_branch
+            repo = Git.repo_name
+            org = Git.repo_org
             runner_id = JSON.parse(`gh run list -L 1 --json databaseId -b #{branch} --repo=#{org}/#{repo}`)[0]['databaseId']
-            raise "Run failed" unless system "gh run watch #{runner_id} --repo=#{org}/#{repo} --exit-status"
+            if system "gh run rerun #{runner_id} --failed --repo=#{org}/#{repo}"
+                sleep 20
+                runner_id = JSON.parse(`gh run list -L 1 --json databaseId -b #{branch} --repo=#{org}/#{repo}`)[0]['databaseId']
+                raise "Run failed" unless system "gh run watch #{runner_id} --repo=#{org}/#{repo} --exit-status"
+            end
+        end
+    end
+end
+
+desc "Push all repos in order"
+task :fpush do |task, args|
+    dirs = FileUtils.parse_args(args, 0)
+    sorted = []
+    PUSH_ORDER.each do |dir|
+        sorted << dir if dirs.include?(dir)
+        dirs.delete(dir)
+    end
+    dir_string = dirs.map { |dir| dir.split("/").last }.join(", ")
+    error "Directories: #{dir_string} not found in push order" if dirs.count > 0
+    sorted.each do |dir|
+        Dir.chdir(dir) do
+            info "Pushing #{dir}"
+            Git.push
         end
     end
 end
@@ -104,6 +186,7 @@ end
 
 # commits = [{sha: "1234567", lines: 100, dir: "some-git-dir"}, ...]
 def spread(commits, start_at, end_at=Time.now)
+    puts "Last Pushed Date: " + Git.last_pushed_date.to_s
     start_at = Git.last_pushed_date if Git.is_repo?(Dir.pwd) && start_at < Git.last_pushed_date
     end_at = Time.now if end_at > Time.now
     spread = end_at - start_at
@@ -114,8 +197,10 @@ def spread(commits, start_at, end_at=Time.now)
     info "Spreading out #{commits.length} commit(s) across #{format("%02dd %02dh %02dm %02ds", days, hours, minutes, seconds)} starting at #{start_at.strftime("%m/%d/%Y %H:%M:%S")} and ending at #{end_at.strftime("%m/%d/%Y %H:%M:%S")}"
     if days < 2
         total = commits.sum { |c| c[:lines] }
-        commits.reverse.each do |c|
-            c[:offset] = start_at += ((c[:lines].to_f/total.to_f) * spread).round
+        commit_at = start_at
+        commits.each do |c|
+            commit_at += (c[:lines].to_f / total) * spread
+            c[:commit_at] = commit_at
         end
     else
         total_lines = commits.sum { |c| c[:lines] }
