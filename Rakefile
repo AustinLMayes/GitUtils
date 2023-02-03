@@ -22,6 +22,16 @@ task :before do |task, args|
   info "Using double delay times" if $extra_slow
 end
 
+desc "Run git pull on a selected set of repositories"
+task :pull_repos do |task, args|
+  FileUtils.act_on_dirs(FileUtils.parse_args(args, 0)) do |dir|
+    info "Pulling #{dir}"
+    system "git", "stash"
+    system "git", "pull"
+    system "git", "stash", "pop"
+  end
+end
+
 desc "Pull all of the selected branches"
 task pull_all: :before do |task, args|
   Git.pull_branches *args.extras, ensure_exists: true
