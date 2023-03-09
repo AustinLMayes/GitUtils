@@ -7,7 +7,7 @@ task :spread_unpushed do |task, args|
     dirs = FileUtils.parse_args(args, 2)
     offset = 0
     offset = TimeUtils.parse_time(args.extras[1]) unless args.extras[1].nil?
-    data = gather_commits(dirs)
+    data = gather_commits(dirs, Time.now - offset - time)
     spread(data, Time.now - offset - time, Time.now - offset)
 end
 
@@ -187,7 +187,7 @@ end
 # commits = [{sha: "1234567", lines: 100, dir: "some-git-dir"}, ...]
 def spread(commits, start_at, end_at=Time.now)
     puts "Last Pushed Date: " + Git.last_pushed_date.to_s
-    start_at = Git.last_pushed_date if Git.is_repo?(Dir.pwd) && start_at < Git.last_pushed_date
+    warning "Start time (#{start_at}) is before last pushed date (#{Git.last_pushed_date})" if Git.is_repo?(Dir.pwd) && start_at < Git.last_pushed_date
     end_at = Time.now if end_at > Time.now
     spread = end_at - start_at
     seconds = spread % 60
