@@ -81,81 +81,14 @@ end
 
 desc "Pull all of the base branches"
 task pull_base: :before do |task, args|
+  system "git", "stash"
   pull_base
   system "git", "checkout", @current
+  system "git", "stash", "pop"
 end
 
 def pull_base
   Git.pull_branches *base_branches, ensure_exists: false
-end
-
-desc "Make an MCO version of the current branch"
-task make_mco: :before do |task, args|
-  mco_name = @current + "-mco"
-  info "Making branch named #{mco_name}"
-  system "git", "checkout", "production-mco"
-  Git.ensure_branch "production-mco"
-  system "git", "checkout", "-b", mco_name
-  Git.ensure_branch mco_name
-  info "Created branch named #{mco_name}"
-  system "git", "checkout", @current
-end
-
-desc "Merge the current branch to MCO"
-task merge_mco: :before do |task, args|
-  if merge_mco
-    system "git", "checkout", @current
-  else
-    error "merge failed"
-  end
-end
-
-def merge_mco
-  error "You can only run this on non-mco branches!" if @current.end_with? "mco"
-  mco_name = @current + "-mco"
-  Git.ensure_exists mco_name
-  system "git", "go", mco_name
-  Git.ensure_branch mco_name
-  info "Merging commits from #{@current} to #{mco_name}"
-  return system "git", "merge", @current, "--no-edit"
-end
-
-desc "Cherry pick the last branch into MCO"
-task cherry_mco: :before do |task, args|
-  if cherry_mco
-    system "git", "checkout", @current
-  else
-    error "cherry-pick failed"
-  end
-end
-
-def cherry_mco
-  error "You can only run this on non-mco branches!" if @current.end_with? "mco"
-  mco_name = @current + "-mco"
-  Git.ensure_exists mco_name
-  commit = `git rev-parse --short HEAD`.strip
-  system "git", "go", mco_name
-  Git.ensure_branch mco_name
-  info "Cherry-picking #{commit} from #{@current} to #{mco_name}"
-  return system "git", "cherry-pick", commit, "--no-edit"
-end
-
-desc "Merge the current branch to gamedevnet"
-task to_gamedev: :before do |task, args|
-  if to_gamedev
-    system "git", "checkout", @current
-  else
-    error "merge failed"
-  end
-end
-
-def to_gamedev
-  current  = Git.current_branch
-  target = current.end_with?("mco") ? "gamedevnet-mco" : "gamedevnet"
-  system "git", "checkout", target
-  Git.ensure_branch target
-  info "Merging #{current} into #{target}"
-  return system "git", "merge", current, "--no-edit"
 end
 
 desc "Merge the current branch to master"
@@ -169,128 +102,40 @@ end
 
 def to_master
   current  = Git.current_branch
-  target = current.end_with?("mco") ? "master-mco" : "master"
+  target = "master-1.19"
   system "git", "checkout", target
   Git.ensure_branch target
   info "Merging #{current} into #{target}"
   return system "git", "merge", current, "--no-edit"
 end
 
-desc "Deploy the @urrent branch to master, merge into MCO, and deploy that to master-mco"
-task deploy_merge: :before do |task, args|
-  deploy "Merge" do
-    merge_mco
-  end
-end
-
-desc "Deploy the current branch to master, cherry-pick into MCO, and deploy that to master-mco"
-task deploy_cherry: :before do |task, args|
-  deploy "Cherry-Pick" do
-    cherry_mco
-  end
-end
-
-def deploy(verb, &block)
-  mco = @current.end_with? "mco"
-  warning "Running on MCO branch! Skipping java merge!" if mco
-  mco_name = mco ? @current : @current + "-mco"
-  base_name = mco ? @current[0..-5] : @current
-  Git.ensure_exists mco_name
-  Git.ensure_exists base_name
-  unless mco
-    if to_master
-      info "Merged #{base_name} to master"
-      system "git", "checkout", base_name
-      wait_range 5, 20 if $delays_enabled
-      if block.call
-        info "#{verb}ed #{base_name} to #{mco_name}"
-        wait_range 10, 30 if $delays_enabled
-      else
-        error "#{verb} to MCO failed"
-      end
-    else
-      error "Merge to master failed"
-    end
-  end
-
-  system "git", "checkout", mco_name
-
-  if to_master
-    info "Merged #{mco_name} to master-mco"
-    system "git", "checkout", base_name
-    wait_range 5, 25 if $delays_enabled
-    info "Pusing all branches to remote"
-    push_all "master", "master-mco", base_name, mco_name
-    info "Pushed all branches to remote"
-  else
-    error "Merge to master-mco failed"
-  end
-end
-
-desc "Deploy Java and MCO to their respective GameDev branches"
-task deploy_gamedev: :before do |task, args|
-  mco = @current.end_with? "mco"
-  warning "Running on MCO branch! Skipping java merge!" if mco
-  mco_name = mco ? @current : @current + "-mco"
-  base_name = mco ? @current[0..-5] : @current
-  Git.ensure_exists mco_name
-  Git.ensure_exists base_name
-  unless mco
-    if to_gamedev
-      info "Merged #{base_name} to gamedevnet"
-      system "git", "checkout", base_name
-      wait_range 5, 20 if $delays_enabled
-    else
-      error "Merge to master failed"
-    end
-  end
-
-  system "git", "checkout", mco_name
-
-  if to_gamedev
-    info "Merged #{mco_name} to gamedevnet-mco"
-    system "git", "checkout", base_name
-    wait_range 5, 25 if $delays_enabled
-    info "Pusing all branches to remote"
-    push_all "gamedevnet", "gamedevnet-mco", base_name, mco_name
-    info "Pushed all branches to remote"
-  else
-    error "Merge to gamedevnet-mco failed"
-  end
-end
-
-desc "Push master,master-mco,curbranch, and curbranch-mco"
+desc "Push master and curbranch"
 task push_up: :before do |task, args|
-  mco = @current.end_with? "mco"
-  mco_name = mco ? @current : @current + "-mco"
-  base_name = mco ? @current[0..-5] : @current
-
   info "Pusing all branches to remote"
-  push_all "gamedevnet", "gamedevnet-mco", "master", "master-mco", base_name, mco_name
+  push_all "master-1.19", @current
 end
 
 desc "Make a PR from the current branch"
 task make_pr: :before do |task, args|
-  make_prs(args.extras[0], false, (!args.extras[1].nil? && args.extras[1] == "true"))
+  make_prs(args.extras[0], (!args.extras[1].nil? && args.extras[1] == "true"))
 end
 
-desc "Make PRs from the current and MCO branches"
-task make_prs: :before do |task, args|
-  error "You can only run this on non-mco branches!" if @current.end_with? "mco"
-  make_prs(args.extras[0], true, (!args.extras[1].nil? && args.extras[1] == "true"))
+desc "Make a PR from the current branch with the last commit as the title"
+task make_pr_last: :before do |task, args|
+  make_prs(Git.last_commit_message, (!args.extras[0].nil? && args.extras[0] == "true"))
 end
 
-def make_prs(title, multi, slack)
+desc "Make a PR from the current branch with the branch name as the title"
+task make_pr_branch: :before do |task, args|
+  branch = Git.current_branch
+  branch = branch.split("/").last
+  branch = branch.gsub("-", " ").titleize
+  make_prs(branch, (!args.extras[0].nil? && args.extras[0] == "true"))
+end
+
+def make_prs(title, slack)
   res = "@here "
-  if multi
-    Git.ensure_exists @current + "-mco"
-    res << GitHub.make_pr(title)
-    wait_range 30, 60 if $delays_enabled
-    system "git", "checkout", @current + "-mco"
-    res << GitHub.make_pr(title)
-  else
-    res << GitHub.make_pr(title, suffix: "")
-  end
+  res << GitHub.make_pr(title, suffix: "")
 
   system "git", "checkout", @current
   if slack
@@ -302,12 +147,9 @@ end
 
 desc "Make a new branch based off of production"
 task new: :before do |task, args|
+  system "git", "stash"
   make_branch args.extras[0], "production"
-end
-
-desc "Make a new branch based off of MCO"
-task new_mco: :before do |task, args|
-  make_branch args.extras[0] + "-mco", "production-mco"
+  system "git", "stash", "pop"
 end
 
 def make_branch(name, base)
