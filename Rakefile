@@ -194,3 +194,37 @@ task :deploy_in_order do |task, args|
     error "Failed to merge main PR!"
   end
 end
+
+desc "Merge production into the current branch"
+task merge_prod: :before do |task, args|
+  dont_pull = args.extras[0] == "false"
+  system "git", "stash"
+  merge_prod(dont_pull)
+  system "git", "stash", "pop"
+end
+
+def merge_prod(dont_pull)
+  unless dont_pull
+    system "git", "pull"
+    pull_base
+  end
+  info "Merging production into #{@current}"
+  system "git", "checkout", @current
+  system "git", "merge", "production", "--no-edit"
+  if to_master
+    system "git", "checkout", @current
+  else
+    error "merge failed"
+  end
+  push_all "master-1.19", @current
+end
+
+desc "Delete and re-pull the master-1.19 branch"
+task reset_master: :before do |task, args|
+  system "git", "stash"
+  system "git", "checkout", "production"
+  system "git", "branch", "-D", "master-1.19"
+  system "git", "fetch", "origin", "master-1.19:master-1.19"
+  system "git", "checkout", @current
+  system "git", "stash", "pop"
+end
