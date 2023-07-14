@@ -93,16 +93,24 @@ end
 
 desc "Merge the current branch to master"
 task to_master: :before do |task, args|
-  if to_master
+  if to_branch("master")
     system "git", "checkout", @current
   else
     error "merge failed"
   end
 end
 
-def to_master
+desc "Merge the current branch to staging"
+task to_staging: :before do |task, args|
+  if to_branch("staging")
+    system "git", "checkout", @current
+  else
+    error "merge failed"
+  end
+end
+
+def to_branch(target)
   current  = Git.current_branch
-  target = "master-1.19"
   system "git", "checkout", target
   Git.ensure_branch target
   info "Merging #{current} into #{target}"
@@ -112,7 +120,7 @@ end
 desc "Push master and curbranch"
 task push_up: :before do |task, args|
   info "Pusing all branches to remote"
-  push_all "master-1.19", @current
+  push_all "master", @current
 end
 
 desc "Make a PR from the current branch"
@@ -211,20 +219,20 @@ def merge_prod(dont_pull)
   info "Merging production into #{@current}"
   system "git", "checkout", @current
   system "git", "merge", "production", "--no-edit"
-  if to_master
+  if to_branch("master")
     system "git", "checkout", @current
   else
     error "merge failed"
   end
-  push_all "master-1.19", @current
+  push_all "master", @current
 end
 
-desc "Delete and re-pull the master-1.19 branch"
+desc "Delete and re-pull the master branch"
 task reset_master: :before do |task, args|
   system "git", "stash"
   system "git", "checkout", "production"
-  system "git", "branch", "-D", "master-1.19"
-  system "git", "fetch", "origin", "master-1.19:master-1.19"
+  system "git", "branch", "-D", "master"
+  system "git", "fetch", "origin", "master:master"
   system "git", "checkout", @current
   system "git", "stash", "pop"
 end
