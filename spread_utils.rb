@@ -7,11 +7,11 @@ task :spread_unpushed do |task, args|
     dirs = FileUtils.parse_args(args, 2)
     offset = 0
     offset = TimeUtils.parse_time(args.extras[1]) unless args.extras[1].nil?
-    data = gather_commits(dirs)
-    start_at = Time.now - time
+    start_at = Time.now - time - offset
+    data = gather_commits(dirs,start_at)
     warning "Start time (#{start_at}) is before last pushed date (#{Git.last_pushed_date})" if Git.is_repo?(Dir.pwd) && start_at < Git.last_pushed_date
-    # start_at = Git.last_pushed_date if Git.is_repo?(Dir.pwd) && start_at < Git.last_pushed_date
-    spread(data, start_at, Time.now - 0)
+    start_at = Git.last_pushed_date if Git.is_repo?(Dir.pwd) && start_at < Git.last_pushed_date
+    spread(data, start_at, Time.now - offset)
 end
 
 desc "Reset repos to the latest commit from remote"
@@ -200,9 +200,11 @@ def spread(commits, start_at, end_at=Time.now)
     if days < 2
         total = commits.sum { |c| c[:lines] }
         commit_at = start_at
+        first = true
         commits.each do |c|
-            commit_at += (c[:lines].to_f / total) * spread
+            commit_at += (c[:lines].to_f / total) * spread unless first
             c[:commit_at] = commit_at
+            first = false
         end
     else
         total_lines = commits.sum { |c| c[:lines] }
