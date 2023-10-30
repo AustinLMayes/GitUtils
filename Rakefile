@@ -125,12 +125,18 @@ end
 
 desc "Make a PR from the current branch"
 task make_pr: :before do |task, args|
-  make_prs(args.extras[0], (!args.extras[1].nil? && args.extras[1] == "true"))
+  res = make_prs(args.extras[0], (!args.extras[1].nil? && args.extras[1] == "true"))
+  if !res.nil?
+    info res
+  end
 end
 
 desc "Make a PR from the current branch with the last commit as the title"
 task make_pr_last: :before do |task, args|
-  make_prs(Git.last_commit_message, (!args.extras[0].nil? && args.extras[0] == "true"))
+  res = make_prs(Git.last_commit_message, (!args.extras[0].nil? && args.extras[0] == "true"))
+  if !res.nil?
+    info res
+  end
 end
 
 desc "Make a PR from the current branch with the branch name as the title"
@@ -138,18 +144,21 @@ task make_pr_branch: :before do |task, args|
   branch = Git.current_branch
   branch = branch.split("/").last
   branch = branch.gsub("-", " ").titleize
-  make_prs(branch, (!args.extras[0].nil? && args.extras[0] == "true"))
+  res = make_prs(branch, (!args.extras[0].nil? && args.extras[0] == "true"))
+  if !res.nil?
+    info res
+  end
 end
 
 def make_prs(title, slack)
-  res = "@here "
-  res << GitHub.make_pr(title, suffix: "")
+  res = GitHub.make_pr(title, suffix: "")
 
   system "git", "checkout", @current
   if slack
     Slack.send_message("#development-prs", res.gsub("\n", " "))
+    return nil
   else
-    info res
+    return res
   end
 end
 
@@ -166,6 +175,116 @@ def make_branch(name, base)
   name = "austin/" + name
   info "Creating #{name} based off of #{base}"
   system "git", "go", name
+end
+
+desc "Make a branch and cherry-pick the specified commits"
+task new_cherry: :before do |task, args|
+  system "git", "stash"
+  make_branch args.extras[0], "production"
+  system "git", "cherry-pick", *args.extras.drop(1)
+  system "git", "stash", "pop"
+end
+
+desc "Make multiple branches out of the unpushed commits"
+task new_cherry_all: :before do |task, args|
+  puts "Start"
+  branches = {
+    # "a" => ["memfix", "Fix memory leak"],
+    "pkt" => ["parkour-time", "CC-7512 Remove roundings from parkour times"],
+    "pkm" => ["parkour-stats", "CC-7069 Fix unranked medals"],
+    "sbs" => ["skyblock-spec", "CC-7449 Remove ability to spectate players in SkyBlock"],
+  }
+  by_tag = {}
+  unknown = []
+  Git.commits_after_last_push.each do |commit|
+    message = `git log --format=%B -n 1 #{commit}`.strip.split("\n").first
+    if message.start_with? "["
+      tag = message.split("]")[0].gsub("[", "")
+      if branches[tag].nil?
+        unknown << message
+      else
+        by_tag[tag] ||= []
+        by_tag[tag] << commit
+      end
+    else
+      unknown << message
+    end
+  end
+
+  if unknown.length > 0
+    error "Unknown tags: #{unknown.join(", ")}"
+  end
+
+  first_current = Git.current_branch
+  # pull_base
+  prs = []
+  by_tag.each do |tag, commits|
+    data = branches[tag]
+    if Git.branch_exists "austin/#{data[0]}"
+      error "Branch austin/#{data[0]} already exists!"
+    end
+    system "git", "stash"
+    system "git", "checkout", "production"
+    @current = "production"
+    make_branch data[0], "production"
+    @current = Git.current_branch
+    commits.each do |commit|
+      time = `git log --format=%ct -n 1 #{commit}`.strip
+      system "GIT_COMMITTER_DATE=\"#{time}\" git cherry-pick --allow-empty #{commit}"
+    end
+    info "Cherry picked #{commits.length} commits to #{data[0]}"
+    system "FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --msg-filter \"sed -e 's/\\[#{tag}\\] //g'\" --commit-filter 'git commit-tree -S \"$@\";' HEAD~#{commits.length}..HEAD"
+    info "Rewrote commit messages for #{data[0]}"
+    wait_range 5, 10
+    if to_branch("master")
+      system "git", "checkout", @current
+    else
+      error "merge failed"
+    end
+    wait_range 5, 10
+    push_all "master", @current
+    wait_range 5, 10
+    prs << make_prs(data[1], false)
+  end
+  info "@here #{prs.join("\n")}"
+  system "git", "checkout", first_current
+end
+
+desc "Set git commit date to author date for n commits"
+task :fix_dates do |task, args|
+  commits = args.extras[0].to_i
+  info "Fixing dates for #{commits} commits"
+  system "FILTER_BRANCH_SQUELCH_WARNING=1" "git", "filter-branch", "-f", "--env-filter", "GIT_COMMITTER_DATE=$GIT_AUTHOR_DATE", "HEAD~#{commits}..HEAD"
+end
+
+desc "Prepare the stage branch starting at a specific time"
+task prepare_stage: :before do |task, args|
+  time = Time.now - TimeUtils.parse_time(args.extras[0])
+  if Git.branch_exists "austin/stage"
+    error "Branch austin/stage already exists!"
+  end
+  system "git", "stash"
+  system "git", "checkout", "production"
+  pull_base
+  @current = "production"
+  make_branch "stage", "production"
+  @current = Git.current_branch
+  # Loop back through history and stop when we hit the specified time
+  start_commit = nil
+  `git log --format=%H`.split("\n").each do |commit|
+    start_commit = commit
+    is_merge = `git log --format=%P -n 1 #{commit}`.strip.split(" ").length > 1
+    next unless is_merge
+    commit_time_raw = `git log --format=%ct -n 1 #{commit}`.strip
+    commit_time = Time.at(commit_time_raw.to_i)
+    if commit_time < time
+      info "#{commit} is before #{time} (#{commit_time_raw})"
+      break
+    else
+      info "#{commit} is after #{time}"
+    end
+  end
+  system "git", "reset", "--hard", start_commit
 end
 
 desc "Deploy a set of branches in order"
