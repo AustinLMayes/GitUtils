@@ -190,9 +190,8 @@ task new_cherry_all: :before do |task, args|
   puts "Start"
   branches = {
     # "a" => ["memfix", "Fix memory leak"],
-    "pkt" => ["parkour-time", "CC-7512 Remove roundings from parkour times"],
-    "pkm" => ["parkour-stats", "CC-7069 Fix unranked medals"],
-    "sbs" => ["skyblock-spec", "CC-7449 Remove ability to spectate players in SkyBlock"],
+    "mod" => ["rem-helper-perms", "CC-7513 Remove helper perms from some moderation commands"],
+    "pkp" => ["parkour-potions", "CC-7442 Apply potion effects sooner for comp parkour"]
   }
   by_tag = {}
   unknown = []
@@ -325,25 +324,31 @@ end
 desc "Merge production into the current branch"
 task merge_prod: :before do |task, args|
   dont_pull = args.extras[0] == "false"
+  branches = [Git.current_branch]
+  if args.extras.length > 1
+    branches = Git.find_branches(args.extras[1])
+  end
   system "git", "stash"
-  merge_prod(dont_pull)
+  pull_base unless dont_pull
+  branches.each do |branch|
+    merge_prod(branch)
+  end
   system "git", "stash", "pop"
 end
 
-def merge_prod(dont_pull)
-  unless dont_pull
-    system "git", "pull"
-    pull_base
-  end
-  info "Merging production into #{@current}"
-  system "git", "checkout", @current
+def merge_prod(branch)
+  wait_range 5, 10
+  info "Merging production into #{branch}"
+  system "git", "checkout", branch
+  system "git", "pull"
   system "git", "merge", "production", "--no-edit"
+  wait_range 5, 10
   if to_branch("master")
     system "git", "checkout", @current
   else
     error "merge failed"
   end
-  push_all "master", @current
+  push_all "master", branch
 end
 
 desc "Delete and re-pull the master branch"
