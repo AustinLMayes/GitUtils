@@ -8,7 +8,7 @@ task :spread_unpushed do |task, args|
     offset = 0
     offset = TimeUtils.parse_time(args.extras[1]) unless args.extras[1].nil?
     start_at = Time.now - time - offset
-    data = gather_commits(dirs,start_at)
+    data = gather_commits(dirs)
     warning "Start time (#{start_at}) is before last pushed date (#{Git.last_pushed_date})" if Git.is_repo?(Dir.pwd) && start_at < Git.last_pushed_date
     start_at = Git.last_pushed_date if Git.is_repo?(Dir.pwd) && start_at < Git.last_pushed_date
     spread(data, start_at, Time.now - offset)
