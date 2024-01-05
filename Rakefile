@@ -1,6 +1,7 @@
 require 'common'
 require "json"
 require 'active_support/time'
+require_relative "../RandomScripts/jira"
 
 desc "Wait between x and x seconds"
 task :wait do |task, args|
@@ -150,6 +151,13 @@ task make_pr_branch: :before do |task, args|
   end
 end
 
+desc "Mark a PR as ready for review"
+task :pr_ready do |task, args|
+  `gh pr ready`
+  sleep 5
+  `gh pr merge --auto --merge`
+end
+
 def make_prs(title, slack)
   res = GitHub.make_pr(title, suffix: "")
 
@@ -187,53 +195,49 @@ end
 
 desc "Make multiple branches out of the unpushed commits"
 task new_cherry_all: :before do |task, args|
-  puts "Start"
   branches = {
-    # "a" => ["memfix", "Fix memory leak"],
-    "mod" => ["rem-helper-perms", "CC-7513 Remove helper perms from some moderation commands"],
-    "pkp" => ["parkour-potions", "CC-7442 Apply potion effects sooner for comp parkour"]
+    # "branch-name" => [%w(commit1 commit2), "PR Title"],  
   }
-  by_tag = {}
+  by_branch = {}
   unknown = []
   Git.commits_after_last_push.each do |commit|
     message = `git log --format=%B -n 1 #{commit}`.strip.split("\n").first
-    if message.start_with? "["
-      tag = message.split("]")[0].gsub("[", "")
-      if branches[tag].nil?
-        unknown << message
-      else
-        by_tag[tag] ||= []
-        by_tag[tag] << commit
+    commit_short = commit[0..6]
+    found = false
+    branches.each do |branch, data|
+      if data[0].include? commit_short
+        by_branch[branch] ||= []
+        by_branch[branch] << commit
+        found = true
+        break
       end
-    else
-      unknown << message
     end
+    unknown << [commit_short, message] unless found
   end
 
   if unknown.length > 0
-    error "Unknown tags: #{unknown.join(", ")}"
+    error "Unknown commits: #{unknown.map{|x| x[0] + " - " + x[1]}.join("\n")}"
   end
 
   first_current = Git.current_branch
   # pull_base
   prs = []
-  by_tag.each do |tag, commits|
-    data = branches[tag]
-    if Git.branch_exists "austin/#{data[0]}"
-      error "Branch austin/#{data[0]} already exists!"
+  by_branch.each do |branch, commits|
+    data = branches[branch]
+    if Git.branch_exists "austin/#{branch}"
+      warn "Branch austin/#{branch} already exists!"
+      sleep 5
     end
     system "git", "stash"
     system "git", "checkout", "production"
     @current = "production"
-    make_branch data[0], "production"
+    make_branch branch, "production"
     @current = Git.current_branch
     commits.each do |commit|
       time = `git log --format=%ct -n 1 #{commit}`.strip
       system "GIT_COMMITTER_DATE=\"#{time}\" git cherry-pick --allow-empty #{commit}"
     end
-    info "Cherry picked #{commits.length} commits to #{data[0]}"
-    system "FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --msg-filter \"sed -e 's/\\[#{tag}\\] //g'\" --commit-filter 'git commit-tree -S \"$@\";' HEAD~#{commits.length}..HEAD"
-    info "Rewrote commit messages for #{data[0]}"
+    info "Cherry picked #{commits.length} commits to #{branch}"
     wait_range 5, 10
     if to_branch("master")
       system "git", "checkout", @current
@@ -244,9 +248,51 @@ task new_cherry_all: :before do |task, args|
     push_all "master", @current
     wait_range 5, 10
     prs << make_prs(data[1], false)
+    commits.each do |commit|
+      transition_issues(commit)
+    end
   end
   info "@here #{prs.join("\n")}"
   system "git", "checkout", first_current
+end
+
+def extract_jira_issues(message)
+  message.scan(/CC-\d+/)
+end
+
+def transition_issues(sha)
+  message = `git log --format=%B -n 1 #{sha}`.strip.split("\n").first
+  jiras = extract_jira_issues(message)
+  jiras.each do |jira|
+    testing_id = -1
+    done_id = -1
+    status = Jira::Issues.get(jira)["fields"]['status']['name']
+    next if status == "Done" || status == "Testing"
+    Jira::Issues.transitions(jira)["transitions"].each do |transition|
+      next unless transition["isAvailable"] == true
+      if transition["name"] == "Testing"
+        testing_id = transition["id"]
+      elsif transition["name"] == "Done"
+        done_id = transition["id"]
+      end
+    end
+    id_to_use = testing_id
+    id_to_use = done_id if id_to_use == -1
+    if id_to_use == -1
+      warn "No transition found for #{jira}"
+    end
+    Jira::Issues.transition(jira, id_to_use)
+    Jira::Issues.add_to_current_sprint(jira, Jira::CC::BOARD_ID)
+    info "Transitioned #{jira}"
+    wait_range 5, 10
+  end
+end
+
+desc "Transition the issues for unpushed commits"
+task transition_issues: :before do |task, args|
+  Git.commits_after_last_push.each do |commit|
+    transition_issues(commit)
+  end
 end
 
 desc "Set git commit date to author date for n commits"
