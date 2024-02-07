@@ -196,7 +196,8 @@ end
 desc "Make multiple branches out of the unpushed commits"
 task new_cherry_all: :before do |task, args|
   branches = {
-    # "branch-name" => [%w(commit1 commit2), "PR Title"],  
+    # "branch-name" => [%w(commit1 commit2), "PR Title", "Jira comment (optional)", false to not merge to master],  
+    
   }
   by_branch = {}
   unknown = []
@@ -226,30 +227,44 @@ task new_cherry_all: :before do |task, args|
     data = branches[branch]
     if Git.branch_exists "austin/#{branch}"
       warn "Branch austin/#{branch} already exists!"
-      sleep 5
+      sleep 3
     end
     system "git", "stash"
     system "git", "checkout", "production"
     @current = "production"
     make_branch branch, "production"
     @current = Git.current_branch
+    did_any = false
     commits.each do |commit|
+      message = `git log --format=%B -n 1 #{commit}`.strip.split("\n").first
+      # Skip of commit message is already in the branch
+      if `git log -n 25 --format=%B`.include? message
+        warn "Commit #{commit} already in branch #{branch}"
+        next
+      end
+      did_any = true
       time = `git log --format=%ct -n 1 #{commit}`.strip
       system "GIT_COMMITTER_DATE=\"#{time}\" git cherry-pick --allow-empty #{commit}"
     end
     info "Cherry picked #{commits.length} commits to #{branch}"
-    wait_range 5, 10
-    if to_branch("master")
-      system "git", "checkout", @current
-    else
-      error "merge failed"
+    if did_any
+      merge_master = data.length > 3 ? data[3] : true
+      wait_range 5, 10
+      if merge_master
+        if to_branch("master")
+          system "git", "checkout", @current
+        else
+          error "merge failed"
+        end
+        wait_range 5, 10
+        push_all "master"
+      end
+      push_all @current
+      wait_range 5, 10
+      prs << make_prs(data[1], false)
     end
-    wait_range 5, 10
-    push_all "master", @current
-    wait_range 5, 10
-    prs << make_prs(data[1], false)
     commits.each do |commit|
-      transition_issues(commit)
+      transition_issues(commit, data[2])
     end
   end
   info "@here #{prs.join("\n")}"
@@ -260,7 +275,7 @@ def extract_jira_issues(message)
   message.scan(/CC-\d+/)
 end
 
-def transition_issues(sha)
+def transition_issues(sha, comment = nil)
   message = `git log --format=%B -n 1 #{sha}`.strip.split("\n").first
   jiras = extract_jira_issues(message)
   jiras.each do |jira|
@@ -283,6 +298,11 @@ def transition_issues(sha)
     end
     Jira::Issues.transition(jira, id_to_use)
     Jira::Issues.add_to_current_sprint(jira, Jira::CC::BOARD_ID)
+    recent_comment = TempStorage.is_stored?(jira + "-comment")
+    if comment && !recent_comment
+      Jira::Issues.add_comment(jira, comment) 
+      TempStorage.store(jira + "-comment", "true", expiry: 20.minutes)
+    end
     info "Transitioned #{jira}"
     wait_range 5, 10
   end
@@ -372,8 +392,9 @@ task merge_prod: :before do |task, args|
   dont_pull = args.extras[0] == "false"
   branches = [Git.current_branch]
   if args.extras.length > 1
-    branches = Git.find_branches(args.extras[1])
+    branches = Git.find_branches_multi(args.extras)
   end
+  branches.delete("austin/stage")
   system "git", "stash"
   pull_base unless dont_pull
   branches.each do |branch|
