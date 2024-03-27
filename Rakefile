@@ -3,6 +3,14 @@ require "json"
 require 'active_support/time'
 require_relative "../RandomScripts/jira"
 
+def determine_dev_branch
+  if Git.branch_exists "master"
+    return "master"
+  else
+    return "main"
+  end
+end
+
 desc "Wait between x and x seconds"
 task :wait do |task, args|
   wait_range *args.extras
@@ -21,6 +29,7 @@ task :before do |task, args|
   info ($delays_enabled ? "" : "NOT ") + "Using Delays!"
   $extra_slow = ENV["GUTILS_EXTRA_SLOW"] == "true"
   info "Using double delay times" if $extra_slow
+  $dev_branch = determine_dev_branch
 end
 
 desc "Run git pull on a selected set of repositories"
@@ -94,7 +103,7 @@ end
 
 desc "Merge the current branch to master"
 task to_master: :before do |task, args|
-  if to_branch("master")
+  if to_branch($dev_branch)
     system "git", "checkout", @current
   else
     error "merge failed"
@@ -121,7 +130,7 @@ end
 desc "Push master and curbranch"
 task push_up: :before do |task, args|
   info "Pusing all branches to remote"
-  push_all "master", @current
+  push_all $dev_branch, @current
 end
 
 desc "Make a PR from the current branch"
@@ -197,7 +206,9 @@ desc "Make multiple branches out of the unpushed commits"
 task new_cherry_all: :before do |task, args|
   branches = {
     # "branch-name" => [%w(commit1 commit2), "PR Title", "Jira comment (optional)", false to not merge to master],  
-    
+    "fixes" => [%w(8a4eeba ad3fccd cb3b37b ed11854 16f76ba cf10bdd), "Random Bug Fixes (Jira Links In Commits)"],
+    "tail-fixes" => [%w(10e494a 596cb78), "Fixes to player trails"],
+    "future-impr" => [%w(f5bf0f6), "Make Futures More Performant"],
   }
   by_branch = {}
   unknown = []
@@ -251,13 +262,13 @@ task new_cherry_all: :before do |task, args|
       merge_master = data.length > 3 ? data[3] : true
       wait_range 5, 10
       if merge_master
-        if to_branch("master")
+        if to_branch($dev_branch)
           system "git", "checkout", @current
         else
           error "merge failed"
         end
         wait_range 5, 10
-        push_all "master"
+        push_all $dev_branch
       end
       push_all @current
       wait_range 5, 10
@@ -297,6 +308,7 @@ def transition_issues(sha, comment = nil)
       warn "No transition found for #{jira}"
     end
     Jira::Issues.transition(jira, id_to_use)
+    Jira::Issues.assign(jira)
     Jira::Issues.add_to_current_sprint(jira, Jira::CC::BOARD_ID)
     recent_comment = TempStorage.is_stored?(jira + "-comment")
     if comment && !recent_comment
@@ -310,7 +322,11 @@ end
 
 desc "Transition the issues for unpushed commits"
 task transition_issues: :before do |task, args|
-  Git.commits_after_last_push.each do |commit|
+  commits = Git.commits_after_last_push
+  if args.extras.length > 0
+    commits = Git.last_n_commits(args.extras[0].to_i)
+  end
+  commits do |commit|
     transition_issues(commit)
   end
 end
@@ -410,20 +426,20 @@ def merge_prod(branch)
   system "git", "pull"
   system "git", "merge", "production", "--no-edit"
   wait_range 5, 10
-  if to_branch("master")
+  if to_branch($dev_branch)
     system "git", "checkout", @current
   else
     error "merge failed"
   end
-  push_all "master", branch
+  push_all $dev_branch, branch
 end
 
 desc "Delete and re-pull the master branch"
 task reset_master: :before do |task, args|
   system "git", "stash"
   system "git", "checkout", "production"
-  system "git", "branch", "-D", "master"
-  system "git", "fetch", "origin", "master:master"
+  system "git", "branch", "-D", $dev_branch
+  system "git", "fetch", "origin", $dev_branch + ":" + $dev_branch
   system "git", "checkout", @current
   system "git", "stash", "pop"
 end
