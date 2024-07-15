@@ -206,14 +206,17 @@ desc "Make multiple branches out of the unpushed commits"
 task new_cherry_all: :before do |task, args|
   branches = {
     # "branch-name" => [%w(commit1 commit2), "PR Title", "Jira comment (optional)", false to not merge to master],  
-    "fixes" => [%w(8a4eeba ad3fccd cb3b37b ed11854 16f76ba cf10bdd), "Random Bug Fixes (Jira Links In Commits)"],
-    "tail-fixes" => [%w(10e494a 596cb78), "Fixes to player trails"],
-    "future-impr" => [%w(f5bf0f6), "Make Futures More Performant"],
+    "bedwars-fixes" => [%w(274bc37 5e70717 0091bff), "Bedwars Fixes"],
+    "parkour-fixes" => [%w(4d31705 c567704), "Parkour Fixes"],
+    "pof-fixes" => [%w(b52a1d5), "Pillars of Fortune Fixes"],
+    "flying-frying" => [%w(a05bb37), "Add Back Flying And Frying Achievement"]
   }
   by_branch = {}
   unknown = []
-  Git.commits_after_last_push.each do |commit|
+  Git.commits_after(Time.now - 2.days).each do |commit|
     message = `git log --format=%B -n 1 #{commit}`.strip.split("\n").first
+    author = `git log --format=%an -n 1 #{commit}`.strip
+    next unless author.include? "Austin"
     commit_short = commit[0..6]
     found = false
     branches.each do |branch, data|
@@ -326,7 +329,7 @@ task transition_issues: :before do |task, args|
   if args.extras.length > 0
     commits = Git.last_n_commits(args.extras[0].to_i)
   end
-  commits do |commit|
+  commits.each do |commit|
     transition_issues(commit)
   end
 end
