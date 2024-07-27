@@ -44,7 +44,7 @@ namespace :mp do
     max = args.extras[0].nil? ? Float::INFINITY : args.extras[0].to_i
     branches = stage_branches(:up)
     branches.each do |branch|
-      if to_branch(branch)
+      if to_branch(branch, strategy: :rebase)
         system "git", "checkout", branch
       else
         error "merge failed"
@@ -52,7 +52,11 @@ namespace :mp do
     end
 
     max_branch = branches.select { |b| b.match(MULTI_PART_PATTERN)[2].to_i <= max }.last
+    max_branch = @current if max_branch.nil? && @current.match(MULTI_PART_PATTERN)[2].to_i <= max
     error "No branches to merge to!" if max_branch.nil?
+    system "git", "checkout", max_branch
+
+    Git.pull_branches $dev_branch
     system "git", "checkout", max_branch
 
     if to_branch($dev_branch)
@@ -64,7 +68,7 @@ namespace :mp do
     branches = branches.select { |b| b.match(MULTI_PART_PATTERN)[2].to_i <= max }
 
     system "git", "checkout", @current
-    push_all *branches, $dev_branch, @current
+    push_all *branches, $dev_branch, @current, force: true
   end
 
   desc "Make a new stage branch"
@@ -105,5 +109,14 @@ namespace :mp do
     system "git", "stash"
     system "git", "checkout", branches.first
     system "git", "stash", "pop"
+  end
+
+  desc "Create PR for current stage branch based on previous stage branch"
+  task pr: :before do |task, args|
+    ensure_on_multi_part_branch
+    branches = stage_branches(:down)
+    error "No branches to create PR from!" if branches.empty?
+    error branches.first
+    GitHub.make_pr(branches.first, suffix: "", base: branches.first)
   end
 end
