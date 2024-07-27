@@ -45,10 +45,10 @@ namespace :br do
     push_all *args.extras
   end
 
-  def push_all(*branches)
+  def push_all(*branches, force: false)
     delay = $delays_enabled ? [5, 25] : [0, 0]
     branches = branches.shuffle
-    Git.push_branches *branches, ensure_exists: false, delay: delay
+    Git.push_branches *branches, ensure_exists: false, delay: delay, force: force
     system "git", "checkout", @current
   end
 
@@ -82,12 +82,36 @@ namespace :br do
     end
   end
 
-  def to_branch(target)
+  def to_branch(target, strategy: :merge)
     current = Git.current_branch
     system "git", "checkout", target
     Git.ensure_branch target
-    info "Merging #{current} into #{target}"
-    return system "git", "merge", current, "--no-edit"
+    case strategy
+    when :merge
+      info "Merging #{current} into #{target}"
+      return system "git", "merge", current, "--no-edit"
+    when :rebase
+      info "Rebasing #{current} onto #{target}"
+      return system "git", "rebase", current
+    else
+      raise "Unknown strategy #{strategy}"
+    end
+  end
+
+  def rebase_onto(base, from, to)
+    system "git", "checkout", base
+    system "git", "pull"
+    system "git", "checkout", @current
+    system "git", "rebase", "--onto", base, from, to
+  end
+
+  desc "Rebase the current branch onto the specified branch"
+  task rebase: :before do |task, args|
+    from = args.extras[0]
+    to = args.extras[1] || @current
+    to = @current if to == "c"
+    base = args.extras[2] || "production"
+    rebase_onto(base, from, to)
   end
 
   desc "Push master and curbranch"
@@ -202,34 +226,8 @@ namespace :br do
     system "git", "checkout", first_current
   end
 
-  desc "Merge the current branch to master"
-  task to_master: :before do |task, args|
-    if to_branch($dev_branch)
-      system "git", "checkout", @current
-    else
-      error "merge failed"
-    end
-  end
-
-  desc "Merge the current branch to staging"
-  task to_staging: :before do |task, args|
-    if to_branch("staging")
-      system "git", "checkout", @current
-    else
-      error "merge failed"
-    end
-  end
-
-  def to_branch(target)
-    current  = Git.current_branch
-    system "git", "checkout", target
-    Git.ensure_branch target
-    info "Merging #{current} into #{target}"
-    return system "git", "merge", current, "--no-edit"
-  end
-
   desc "Merge production into the current branch"
-  task merge_prod: :before do |task, args|
+  task rebase_prod: :before do |task, args|
     dont_pull = args.extras[0] == "false"
     branches = [Git.current_branch]
     if args.extras.length > 1
@@ -239,24 +237,11 @@ namespace :br do
     system "git", "stash"
     pull_base unless dont_pull
     branches.each do |branch|
-      merge_prod(branch)
+      system "git", "checkout", branch
+      rebase_onto("production", "production", branch)
     end
+    system "git", "checkout", @current
     system "git", "stash", "pop"
-  end
-
-  def merge_prod(branch)
-    wait_range 5, 10
-    info "Merging production into #{branch}"
-    system "git", "checkout", branch
-    system "git", "pull"
-    system "git", "merge", "production", "--no-edit"
-    wait_range 5, 10
-    if to_branch($dev_branch)
-      system "git", "checkout", @current
-    else
-      error "merge failed"
-    end
-    push_all $dev_branch, branch
   end
 
   desc "Delete and re-pull the master branch"
