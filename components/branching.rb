@@ -147,10 +147,13 @@ namespace :br do
   task new_cherry_all: :before do |task, args|
     branches = {
       # "branch-name" => [%w(commit1 commit2), "PR Title", "Jira comment (optional)", false to not merge to master],
-      "bedwars-fixes" => [%w(274bc37 5e70717 0091bff), "Bedwars Fixes"],
-      "parkour-fixes" => [%w(4d31705 c567704), "Parkour Fixes"],
-      "pof-fixes" => [%w(b52a1d5), "Pillars of Fortune Fixes"],
-      "flying-frying" => [%w(a05bb37), "Add Back Flying And Frying Achievement"]
+      "expire-fix" => [%w(985b95a), "CC-9263 Fix Rank Expiration Menu"],
+      "bw-fixes" => [%w(4d9bbf3 b9c8051), "BlockWars Fixes"],
+      "offline-fixes" => [%w(8f3e757 d07b452 fa3cc32 63b82c4 eaea7b6 62ee79b 20556c7), "Fix Many Exceptions Caused By Players Leaving"],
+      "cmd-fixes" => [%w(fabffb7 df22551), "Fix Some Command System Issues"],
+      "ffa-fixes" => [%w(048d296 e0170f2 461d386 d7d24c2), "FFA Fixes"],
+      "ac-fix" => [%w(adde725 0b50a90), "Sentinel Fix"],
+      "misc-fixes" => [%w(d00e9eb ee1cdcc 338dee3 1f1e830), "Miscellaneous Fixes"],
     }
     by_branch = {}
     unknown = []
