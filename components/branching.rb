@@ -102,6 +102,10 @@ namespace :br do
     system "git", "checkout", base
     system "git", "pull"
     system "git", "checkout", @current
+    if base.nil?
+      system "git", "rebase", from, to
+      return
+    end
     system "git", "rebase", "--onto", base, from, to
   end
 
@@ -240,10 +244,20 @@ namespace :br do
     system "git", "stash"
     pull_base unless dont_pull
     branches.each do |branch|
-      system "git", "checkout", branch
-      rebase_onto("production", "production", branch)
+      system "git", "checkout", "production"
+      if to_branch(branch, strategy: :rebase)
+        system "git", "checkout", branch
+        if to_branch($dev_branch)
+          system "git", "checkout", branch
+        else
+          error "merge failed"
+        end
+      else
+        error "rebase failed"
+      end
     end
     system "git", "checkout", @current
+    push_all *branches, $dev_branch, force: true
     system "git", "stash", "pop"
   end
 
