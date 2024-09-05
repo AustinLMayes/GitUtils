@@ -113,10 +113,10 @@ namespace :mp do
 
   desc "Create PR for current stage branch based on previous stage branch"
   task pr: :before do |task, args|
+    title = args.extras[0..-1].join(" ")
     ensure_on_multi_part_branch
     branches = stage_branches(:down)
     error "No branches to create PR from!" if branches.empty?
-    error branches.first
-    GitHub.make_pr(branches.first, suffix: "", base: branches.first)
+    GitHub.make_pr(title, suffix: "", base: branches.first)
   end
 end
