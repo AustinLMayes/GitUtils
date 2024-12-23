@@ -46,6 +46,7 @@ namespace :br do
   end
 
   def push_all(*branches, force: false)
+    return if $dont_push
     delay = $delays_enabled ? [5, 25] : [0, 0]
     branches = branches.shuffle
     Git.push_branches *branches, ensure_exists: false, delay: delay, force: force

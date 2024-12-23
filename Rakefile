@@ -30,6 +30,7 @@ task :before do |task, args|
   $extra_slow = ENV["GUTILS_EXTRA_SLOW"] == "true"
   info "Using double delay times" if $extra_slow
   $dev_branch = determine_dev_branch
+  $dont_push = ENV["GUTILS_DONT_PUSH"] == "true"
 end
 
 Dir["#{File.dirname(__FILE__)}/components/*.rb"].each { |file| load file }
