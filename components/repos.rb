@@ -17,4 +17,20 @@ namespace :r do
       system "git", "pull"
     end
   end
+
+  desc "Run all matching workflows on the current branch"
+  task :run_workflows do |task, args|
+    error "You must run this in the root of the repo" unless File.exists?(".github/workflows")
+    branch = args.extras[0]
+    branch = Git.current_branch if branch == "c"
+    workflows = Dir.glob(".github/workflows/*.yml").map { |f| File.basename(f, ".yml") }
+    args.extras.drop(1).each do |query|
+      workflows.each do |workflow|
+        if workflow.match?(query)
+          info "Running workflow #{workflow}"
+          sh "gh workflow run #{workflow}.yml --ref #{branch}"
+        end
+      end
+    end
+  end
 end
