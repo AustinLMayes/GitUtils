@@ -234,10 +234,13 @@ namespace :br do
     system "git", "checkout", first_current
   end
 
-  desc "Merge production into the current branch"
+  desc "Rebase the current branch onto production"
   task rebase_prod: :before do |task, args|
     dont_pull = args.extras[0] == "false"
     branches = [Git.current_branch]
+    if dont_pull
+      args.extras.shift
+    end
     if args.extras.length > 1
       branches = Git.find_branches_multi(args.extras)
     end
@@ -260,6 +263,30 @@ namespace :br do
     system "git", "checkout", @current
     push_all *branches, $dev_branch, force: true
     system "git", "stash", "pop"
+  end
+
+  desc "Merge production into the current branch"
+  task merge_prod: :before do |task, args|
+    branches = [Git.current_branch]
+    if args.extras.length > 0
+      branches = Git.find_branches_multi(args.extras)
+    end
+    branches.each do |branch|
+      system "git", "stash"
+      system "git", "checkout", "production"
+      if to_branch(branch)
+        system "git", "checkout", branch
+        if to_branch($dev_branch)
+          system "git", "checkout", branch
+        else
+          error "merge failed"
+        end
+      else
+        error "merge failed"
+      end
+      system "git", "stash", "pop"
+    end
+    push_all *branches, $dev_branch
   end
 
   desc "Delete and re-pull the master branch"
