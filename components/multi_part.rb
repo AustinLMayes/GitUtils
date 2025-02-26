@@ -11,16 +11,18 @@ namespace :mp do
     end
   end
 
-  def stage_branches(direction = :up, branch: nil)
+  def stage_branches(direction = :up, branch: nil, inclusive: false)
     branch ||= Git.current_branch
     ensure_multi_part_branch(branch)
     match = branch.match(MULTI_PART_PATTERN)
     base = match[1]
     num = match[2].to_i
     branches = []
+    if inclusive
+      branches << branch
+    end
     if direction == :down
       branch = "austin/#{base}-stage-#{num - 1}"
-      puts branch
       while Git.branch_exists(branch)
         branches << branch
         num -= 1
@@ -38,46 +40,41 @@ namespace :mp do
     branches
   end
 
-  desc "Merge the current stage branch to all downstream branches"
-  task merge_down: :before do |task, args|
+  desc "Create patches for all stage branches"
+  task create_patches: :before do |task, args|
     ensure_on_multi_part_branch
-    max = args.extras[0].nil? ? Float::INFINITY : args.extras[0].to_i
-    try_build = args.extras[1] == "build"
-    branches = stage_branches(:up)
-    if try_build
-      system "./gradlew", "classes"
-      error "Build failed on branch #{@current}" unless $?.success?
+    system "git", "stash"
+    FileUtils.rm_rf Git::PATCHES_PATH + "/" + File.basename(Dir.pwd) + "/mp/" + Git.current_branch.match(MULTI_PART_PATTERN)[1]
+    first = stage_branches(:down, inclusive: true).last
+    branches = stage_branches(:up, branch: first, inclusive: true)
+    prev = "production"
+    branches.each do |branch|
+      system "git", "checkout", branch
+      Git.create_patches(base: prev, prefix: "s-" + branch.match(MULTI_PART_PATTERN)[2], path: "mp/#{branch.match(MULTI_PART_PATTERN)[1]}")
+      prev = branch
+    end
+    system "git", "checkout", @current
+  end
+
+  desc "Apply patches for stage branches"
+  task apply_patches: :before do |task, args|
+    current = args.extras[0] == "true"
+    ensure_on_multi_part_branch
+    system "git", "stash"
+    branches = stage_branches(:up, inclusive: current)
+    error "At the last stage branch!" if branches.empty?
+    if current
+      prev = stage_branches(:down).first
+      prev = "production" if prev.nil?
+      system "git", "checkout", prev
     end
     branches.each do |branch|
-      if to_branch(branch, strategy: :rebase)
-        system "git", "checkout", branch
-        if try_build
-          system "./gradlew", "classes"
-          error "Build failed on branch #{branch}" unless $?.success?
-        end
-      else
-        error "merge failed"
-      end
+      system "git", "branch", "-D", branch
     end
-
-    max_branch = branches.select { |b| b.match(MULTI_PART_PATTERN)[2].to_i <= max }.last
-    max_branch = @current if max_branch.nil? && @current.match(MULTI_PART_PATTERN)[2].to_i <= max
-    error "No branches to merge to!" if max_branch.nil?
-    system "git", "checkout", max_branch
-
-    Git.pull_branches $dev_branch
-    system "git", "checkout", max_branch
-
-    if to_branch($dev_branch)
-      system "git", "checkout", @current
-    else
-      error "merge failed"
+    branches.each do |branch|
+      system "git", "go", branch
+      Git.apply_patches(prefix: "s-" + branch.match(MULTI_PART_PATTERN)[2], path: "mp/#{branch.match(MULTI_PART_PATTERN)[1]}")
     end
-
-    branches = branches.select { |b| b.match(MULTI_PART_PATTERN)[2].to_i <= max }
-
-    system "git", "checkout", @current
-    push_all *branches, $dev_branch, @current, force: true
   end
 
   desc "Make a new stage branch"
