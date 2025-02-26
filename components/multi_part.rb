@@ -107,7 +107,7 @@ namespace :mp do
       branches.reverse.each do |branch|
         system "git", "checkout", branch
         new_num = branch.match(MULTI_PART_PATTERN)[2].to_i + 1
-        new_branch = "#{base}-stage-#{new_num}"
+        new_branch = "austin/#{base}-stage-#{new_num}"
         system "git", "branch", "-m", new_branch
         info "Renamed #{branch} to #{new_branch}"
       end
