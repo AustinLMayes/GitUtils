@@ -62,7 +62,8 @@ namespace :mp do
     ensure_on_multi_part_branch
     system "git", "stash"
     branches = stage_branches(:up, inclusive: current)
-    error "At the last stage branch!" if branches.empty?
+    branches += branches_from_patches(Git.current_branch)
+    branches.uniq!
     if current
       prev = stage_branches(:down).first
       prev = "production" if prev.nil?
@@ -74,6 +75,17 @@ namespace :mp do
     branches.each do |branch|
       system "git", "go", branch
       Git.apply_patches(prefix: "s-" + branch.match(MULTI_PART_PATTERN)[2], path: "mp/#{branch.match(MULTI_PART_PATTERN)[1]}")
+    end
+    system "git", "checkout", @current
+  end
+
+  def branches_from_patches(current)
+    base = current.match(MULTI_PART_PATTERN)[1]
+    min = current.match(MULTI_PART_PATTERN)[2].to_i
+    Dir.glob(Git::PATCHES_PATH + "/" + File.basename(Dir.pwd) + "/mp/#{base}/*").map do |file|
+      "austin/" + base + "-stage-" + File.basename(file).split("-")[1]
+    end.uniq.select do |branch|
+      branch.match(MULTI_PART_PATTERN)[2].to_i > min
     end
   end
 
