@@ -267,10 +267,15 @@ namespace :br do
 
   desc "Merge production into the current branch"
   task merge_prod: :before do |task, args|
+    dont_pull = args.extras[0] == "false"
     branches = [Git.current_branch]
+    if dont_pull
+      args.extras.shift
+    end
     if args.extras.length > 0
       branches = Git.find_branches_multi(args.extras)
     end
+    pull_base unless dont_pull
     branches.each do |branch|
       system "git", "stash"
       system "git", "checkout", "production"
