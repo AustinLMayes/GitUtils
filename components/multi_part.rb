@@ -74,6 +74,7 @@ namespace :mp do
     end
     branches.each do |branch|
       system "git", "go", branch
+      info "Applying patches for #{branch}"
       Git.apply_patches(prefix: "s-" + branch.match(MULTI_PART_PATTERN)[2], path: "mp/#{branch.match(MULTI_PART_PATTERN)[1]}")
     end
     system "git", "checkout", @current
@@ -86,6 +87,8 @@ namespace :mp do
       "austin/" + base + "-stage-" + File.basename(file).split("-")[1]
     end.uniq.select do |branch|
       branch.match(MULTI_PART_PATTERN)[2].to_i > min
+    end.sort_by do |branch|
+      branch.match(MULTI_PART_PATTERN)[2].to_i
     end
   end
 
