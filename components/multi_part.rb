@@ -185,7 +185,7 @@ namespace :mp do
   desc "Run ./gradlew classes on each stage branch amd stop on failure"
   task test_build: :before do |task, args|
     ensure_on_multi_part_branch
-    branches = stage_branches(:up)
+    branches = stage_branches(:up, inclusive: true)
     error "No branches to test build!" if branches.empty?
     branches.each do |branch|
       system "git", "checkout", branch
