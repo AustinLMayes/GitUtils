@@ -24,7 +24,7 @@ namespace :jira do
           id_to_use = testing_id
           id_to_use = done_id if id_to_use == -1
           if id_to_use == -1
-            warn "No transition found for #{jira}"
+            warning "No transition found for #{jira}"
           end
           Jira::Issues.transition(jira, id_to_use)
           Jira::Issues.assign(jira)

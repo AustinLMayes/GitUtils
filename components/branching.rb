@@ -189,7 +189,7 @@ namespace :br do
     by_branch.each do |branch, commits|
       data = branches[branch]
       if Git.branch_exists "austin/#{branch}"
-        warn "Branch austin/#{branch} already exists!"
+        warning "Branch austin/#{branch} already exists!"
         sleep 3
       end
       system "git", "stash"
@@ -202,7 +202,7 @@ namespace :br do
         message = `git log --format=%B -n 1 #{commit}`.strip.split("\n").first
         # Skip of commit message is already in the branch
         if `git log -n 25 --format=%B`.include? message
-          warn "Commit #{commit} already in branch #{branch}"
+          warning "Commit #{commit} already in branch #{branch}"
           next
         end
         did_any = true
