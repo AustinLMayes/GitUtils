@@ -251,11 +251,6 @@ namespace :br do
       system "git", "checkout", "production"
       if to_branch(branch, strategy: :rebase)
         system "git", "checkout", branch
-        if to_branch($dev_branch)
-          system "git", "checkout", branch
-        else
-          error "merge failed"
-        end
       else
         error "rebase failed"
       end
