@@ -203,4 +203,15 @@ namespace :mp do
     error "No branches to create PR from!" if branches.empty?
     GitHub.make_pr(title, suffix: "", base: branches.first)
   end
+
+  desc "Push all parts"
+  task push: :before do |tak, args|
+    ensure_on_multi_part_branch
+    branches = stage_branches(:up, inclusive: true)
+    branches.each do |branch|
+      system "git", "checkout", branch
+      system "git", "pu", "--force"
+    end
+    system "git", "checkout", @current
+  end
 end
