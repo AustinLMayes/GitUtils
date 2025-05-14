@@ -37,6 +37,31 @@ namespace :jira do
           info "Transitioned #{jira}"
           wait_range 5, 10
         end
+        jiras
+      end
+
+      def generate_qa_message(keys)
+        use_please = [true, false].sample
+        use_tag = [true, false].sample
+        intros = ["Can someone", "Can anyone", "Is anyone able to", "Can I get someone to", "Can I get anyone to"]
+        segs = ["have a look at", "check out", "take a look at", "review", "check", "have a look over"]
+        intro = intros.sample
+        seg = segs.sample
+        message = ""
+        message += "@qateam " if use_tag
+        message += "#{intro} "
+        message += "#{seg} "
+        i = 0
+        keys.each do |key|
+          message += key
+          if i < keys.length - 1
+            message += ", " if i < keys.length - 2
+            message += " and " if i == keys.length - 2
+          end
+          i += 1
+        end
+        message += " please?" if use_please
+        message
       end
       
       desc "Transition the issues for unpushed commits"
@@ -45,8 +70,10 @@ namespace :jira do
         if args.extras.length > 0
           commits = Git.last_n_commits(args.extras[0].to_i)
         end
+        ids = []
         commits.each do |commit|
-          transition_issues(commit)
+          ids += transition_issues(commit)
         end
+        Clipboard.copy(generate_qa_message(ids))
       end
 end
