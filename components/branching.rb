@@ -49,6 +49,8 @@ namespace :br do
     return if $dont_push
     delay = $delays_enabled ? [5, 25] : [0, 0]
     branches = branches.shuffle
+    # never push production
+    branches.delete("production")
     Git.push_branches *branches, ensure_exists: false, delay: delay, force: force
     system "git", "checkout", @current
   end
@@ -67,7 +69,8 @@ namespace :br do
 
   desc "Merge the current branch to master"
   task to_master: :before do |task, args|
-    if to_branch($dev_branch)
+    strategy = args.extras.length > 0 ? args.extras[0].to_sym : :merge
+    if to_branch($dev_branch, strategy: strategy)
       system "git", "checkout", @current
     else
       error "merge failed"
@@ -90,10 +93,26 @@ namespace :br do
     case strategy
     when :merge
       info "Merging #{current} into #{target}"
-      return system "git", "merge", current, "--no-edit"
+      return system "git", "merge", current, "--no-edit", "--rerere-autoupdate"
+    when :tmerge
+      info "Merging #{current} into #{target} using theirs strategy"
+      return system "git", "merge", current, "--no-edit", "-X", "theirs", "--rerere-autoupdate"
+    when :smerge
+      info "Squash merging #{current} into #{target}"
+      res = system "git", "merge", "--squash", current
+      if res
+        system "git", "commit", "--no-edit", "-m", "Merge branch '#{current}' into #{target}"
+        return true
+      else
+        return false
+      end
     when :rebase
       info "Rebasing #{current} onto #{target}"
       return system "git", "rebase", current
+    when :cherry
+      info "Cherry-picking #{current} onto #{target}"
+      commits = Git.commits_between(target, current).join(" ")
+      return system "git cherry-pick --allow-empty #{commits}"
     else
       raise "Unknown strategy #{strategy}"
     end
@@ -241,7 +260,7 @@ namespace :br do
     if dont_pull
       args.extras.shift
     end
-    if args.extras.length > 1
+    if args.extras.length > 0
       branches = Git.find_branches_multi(args.extras)
     end
     branches.delete("austin/stage")
@@ -295,6 +314,19 @@ namespace :br do
     system "git", "checkout", "production"
     system "git", "branch", "-D", $dev_branch
     system "git", "fetch", "origin", $dev_branch + ":" + $dev_branch
+    system "git", "checkout", @current
+    system "git", "stash", "pop"
+  end
+
+  desc "Merge production into main branch"
+  task sync_master: :before do |task, args|
+    system "git", "stash"
+    system "git", "checkout", "production"
+    system "git", "pull"
+    system "git", "checkout", $dev_branch
+    system "git", "pull"
+    system "git", "merge", "--no-edit", "production"
+    system "git", "push"
     system "git", "checkout", @current
     system "git", "stash", "pop"
   end
