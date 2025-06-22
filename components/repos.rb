@@ -24,11 +24,16 @@ namespace :r do
     branch = args.extras[0]
     branch = Git.current_branch if branch == "c"
     workflows = Dir.glob(".github/workflows/*.yml").map { |f| File.basename(f, ".yml") }
+    flags = ""
+    # check if we're in rocket-data-platform repo
+    if `git remote -v`.include?("rocket-data-platform")
+      flags += "-f environment=man1-#{branch == "production" ? "prod" : "dev"}1"
+    end
     args.extras.drop(1).each do |query|
       workflows.each do |workflow|
         if workflow.match?(query)
           info "Running workflow #{workflow}"
-          sh "gh workflow run #{workflow}.yml --ref #{branch}"
+          sh "gh workflow run #{workflow}.yml --ref #{branch} #{flags}".strip
         end
       end
     end
