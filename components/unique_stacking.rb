@@ -9,9 +9,9 @@ namespace :ustacking do
     branches.each do |branch|
       system "git", "checkout", branch
       Git.ensure_clean
+      system "git", "pu", "--force"
       create_stacked_prs("production")
       system "git", "checkout", branch
-      system "git", "pu", "--force"
     end
   end
 
