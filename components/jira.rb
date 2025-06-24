@@ -8,7 +8,11 @@ namespace :jira do
     PASSED_QA = "10056"
 
     def transition_issues(sha, comment: nil, done: false, ensure_mine: false)
-      message = `git log --format=%B -n 1 #{sha}`.strip.split("\n").first
+      message_full = `git log --format=%B -n 1 #{sha}`.strip.split("\n")
+      message = message_full.first
+      if message.start_with?("Merge pull request") && message_full.length > 2
+        message = message_full[2..-1].join("\n")
+      end
       jiras = extract_jira_issues(message)
       transitioned = []
       jiras.each do |jira|
