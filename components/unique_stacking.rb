@@ -10,12 +10,12 @@ namespace :ustacking do
       system "git", "checkout", branch
       Git.ensure_clean
       system "git", "pu", "--force"
-      create_stacked_prs("production")
+      create_unique_stacked_prs("production")
       system "git", "checkout", branch
     end
   end
 
-  def create_stacked_prs(base)
+  def create_unique_stacked_prs(base)
     info "Creating UNIQUE stacked PRs for #{base}..#{Git.current_branch}"
     commits = Git.my_commits_between(base, Git.current_branch, "austin")
     branches = []
