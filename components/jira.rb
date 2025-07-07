@@ -10,8 +10,9 @@ namespace :jira do
     def transition_issues(sha, comment: nil, done: false, ensure_mine: false)
       message_full = `git log --format=%B -n 1 #{sha}`.strip.split("\n")
       message = message_full.first
-      if message.start_with?("Merge pull request") && message_full.length > 2
-        message = message_full[2..-1].join("\n")
+      if message.start_with?("Merge pull request")
+        pr_number = message.split(" ")[3].gsub("#", "")
+        message = `gh pr view #{pr_number} --json title,body --jq '.title + \"\\n\" + .body'`.strip
       end
       jiras = extract_jira_issues(message)
       transitioned = []
@@ -21,7 +22,7 @@ namespace :jira do
         fields = Jira::Issues.get(jira)["fields"]
         if ensure_mine
           if fields['assignee'].nil? || fields['assignee']['emailAddress'] != "austin@ziax.com"
-            warning "Skipping #{jira} as it is not assigned to me (#{fields['assignee']})"
+            warning "Skipping #{jira} as it is not assigned to me (#{fields['assignee']['emailAddress']})"
             next
           end
         end
