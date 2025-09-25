@@ -17,6 +17,7 @@ namespace :jira do
       jiras = extract_jira_issues(message)
       transitioned = []
       jiras.each do |jira|
+        issue_done = done
         trans_testing = nil
         trans_done = nil
         fields = Jira::Issues.get(jira)["fields"]
@@ -28,7 +29,10 @@ namespace :jira do
         end
         id = fields['status']['id']
         status = fields['status']['name']
-        next if status == "Done" || (!done && (status == "Testing" || id == PASSED_QA)) || status == "Completed"
+        if status == "Done" || (!issue_done && (status == "Testing" || id == PASSED_QA)) || status == "Completed"
+          info "Skipping #{jira} as it is already #{status}. Done=#{issue_done}"
+          next
+        end
         Jira::Issues.transitions(jira)["transitions"].each do |transition|
           next unless transition["isAvailable"] == true
           if transition["name"] == "Testing"
@@ -37,9 +41,9 @@ namespace :jira do
             trans_done = transition
           end
         end
-        done = done && (id == PASSED_QA || status == "Testing Failed")
-        trans_to_use = done ? trans_done : trans_testing
-        trans_to_use = trans_done if trans_testing.nil? && !done
+        issue_done = issue_done && (id == PASSED_QA)
+        trans_to_use = issue_done ? trans_done : trans_testing
+        trans_to_use = trans_done if trans_testing.nil? && !issue_done
         unless trans_to_use
           warning "No transition found for #{jira}"
           next
