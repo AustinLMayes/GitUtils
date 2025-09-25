@@ -1,18 +1,26 @@
 namespace :stacking do
+  def base_stacking_branch
+    ENV["MAIN_BRANCH"] || "production"
+  end
+
   desc "Given the diff of the current branch, create pull requests for each commit in the diff"
   task diff: :before do |task, args|
+    current = Git.current_branch
     Git.ensure_clean
     branches = [Git.current_branch]
     unless args.extras[0].nil?
       branches = Git.find_branches_multi(args.extras)
     end
+    system "git checkout #{base_stacking_branch}"
+    system "git pull"
     branches.each do |branch|
       system "git", "checkout", branch
       Git.ensure_clean
-      create_stacked_prs("production")
+      create_stacked_prs(base_stacking_branch)
       system "git", "checkout", branch
       system "git", "pu", "--force"
     end
+    system "git checkout #{current}"
   end
 
   def create_stacked_prs(base)
@@ -52,7 +60,7 @@ namespace :stacking do
       if Dir.exist?("microservices")
         cmd = "./gradlew -p microservices classes && ./gradlew :data-interface:classes"
       end
-      error "Test failed for #{branch}" unless system "git", "rebase", "-x", cmd, "production"
+      error "Test failed for #{branch}" unless system "git", "rebase", "-x", cmd, base_stacking_branch
     end
   end
   
@@ -72,7 +80,7 @@ namespace :stacking do
     branches.each do |branch|
       system "git", "checkout", branch
       Git.ensure_clean
-      commits = Git.my_commits_between("production", branch, "austin")
+      commits = Git.my_commits_between(base_stacking_branch, branch, "austin")
       commit_branches += commits.map do |commit|
         msg = `git log -1 --pretty=format:%s #{commit}`
         branch = msg.split(" ").first
