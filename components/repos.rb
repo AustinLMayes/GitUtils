@@ -24,6 +24,8 @@ namespace :r do
     branch = args.extras[0]
     branch = Git.current_branch if branch == "c"
     workflows = Dir.glob(".github/workflows/*.yml").map { |f| File.basename(f, ".yml") }
+    workflows += Dir.glob(".github/workflows/*.yaml").map { |f| File.basename(f, ".yaml") }
+    error "No workflows found" if workflows.empty?
     flags = ""
     # check if we're in rocket-data-platform repo
     if `git remote -v`.include?("rocket-data-platform")
