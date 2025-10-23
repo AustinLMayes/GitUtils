@@ -32,6 +32,7 @@ namespace :r do
       flags += "-f environment=man1-#{branch == "production" ? "prod" : "dev"}1"
     end
     args.extras.drop(1).each do |query|
+      query = Regexp.new(query, Regexp::IGNORECASE)
       workflows.each do |workflow|
         if workflow.match?(query)
           info "Running workflow #{workflow}"
