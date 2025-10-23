@@ -28,7 +28,12 @@ namespace :stacking do
     commits = Git.my_commits_between(base, Git.current_branch, "austin")
     branches = []
     info "Creating PRs for #{commits.length} commits"
-    commits.each do |commit|
+    max_commits = ENV["MAX_STACKED_COMMITS"] ? ENV["MAX_STACKED_COMMITS"].to_i : 50
+    commits.each_with_index do |commit, index|
+      if index >= max_commits
+        warning "Reached maximum of #{max_commits} stacked commits, stopping"
+        break
+      end
       msg = `git log -1 --pretty=format:%s #{commit}`
       friendly_msg = msg.split("\n").first.split(" ")[1..-1].join(" ")
       branch = msg.split(" ").first
