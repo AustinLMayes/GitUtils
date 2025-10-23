@@ -37,6 +37,7 @@ namespace :ustacking do
             GitHub.make_pr(friendly_msg, base: base, head: branch)
           else
             GitHub.change_pr_title(branch, friendly_msg)
+            GitHub.change_pr_base(branch, base)
           end
         end
         system "git checkout #{base}"
