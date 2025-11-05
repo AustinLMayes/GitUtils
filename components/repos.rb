@@ -27,7 +27,6 @@ namespace :r do
     workflows += Dir.glob(".github/workflows/*.yaml").map { |f| File.basename(f, ".yaml") }
     error "No workflows found" if workflows.empty?
     flags = ""
-    # check if we're in rocket-data-platform repo
     if `git remote -v`.include?("rocket-data-platform")
       flags += "-f environment=man1-#{branch == "production" ? "prod" : "dev"}1"
     end
@@ -36,7 +35,11 @@ namespace :r do
       workflows.each do |workflow|
         if workflow.match?(query)
           info "Running workflow #{workflow}"
-          sh "gh workflow run #{workflow}.yml --ref #{branch} #{flags}".strip
+          if workflow.include? "publish"
+            sh "gh workflow run #{workflow}.yml --ref #{branch}".strip
+          else
+            sh "gh workflow run #{workflow}.yml --ref #{branch} #{flags}".strip
+          end
         end
       end
     end
