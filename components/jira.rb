@@ -107,7 +107,7 @@ namespace :jira do
       system "git stash"
       system "git checkout production"
       Git.ensure_branch "production"
-      commits = Git.last_n_commits(10)
+      commits = Git.last_n_commits(30)
       commits.each do |commit|
         transition_issues(commit, done: true, ensure_mine: true)
       end
