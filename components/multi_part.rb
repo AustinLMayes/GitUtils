@@ -210,7 +210,7 @@ namespace :mp do
     branches = stage_branches(:up, inclusive: true)
     branches.each do |branch|
       system "git", "checkout", branch
-      system "git", "pu", "--force"
+      Git.push(force: true)
     end
     system "git", "checkout", @current
   end

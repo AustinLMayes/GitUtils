@@ -240,7 +240,7 @@ namespace :br do
     system "git", "checkout", $dev_branch
     system "git", "pull"
     system "git", "merge", "--no-edit", "production"
-    system "git", "push"
+    Git.push
     system "git", "checkout", @current
     system "git", "stash", "pop"
   end

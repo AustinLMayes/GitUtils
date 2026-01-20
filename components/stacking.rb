@@ -18,7 +18,7 @@ namespace :stacking do
       Git.ensure_clean
       create_stacked_prs(base_stacking_branch)
       system "git", "checkout", branch
-      system "git", "pu", "--force"
+      Git.push(force: true)
     end
     system "git checkout #{current}"
   end
