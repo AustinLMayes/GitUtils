@@ -44,4 +44,32 @@ namespace :r do
       end
     end
   end
+
+  desc "Cancel all matching workflows on the current branch"
+  task :cancel_workflows do |task, args|
+    error "You must run this in the root of the repo" unless File.exists?(".github/workflows")
+    branch = args.extras[0]
+    branch = Git.current_branch if branch == "c"
+    workflows = Dir.glob(".github/workflows/*.yml").map { |f| File.basename(f, ".yml") }
+    workflows += Dir.glob(".github/workflows/*.yaml").map { |f| File.basename(f, ".yaml") }
+    error "No workflows found" if workflows.empty?
+    args.extras.drop(1).each do |query|
+      query = Regexp.new(query, Regexp::IGNORECASE)
+      workflows.each do |workflow|
+        if workflow.match?(query)
+          info "Canceling workflow #{workflow}"
+          # gh run list --workflow=WORKFLOW_NAME --branch=BRANCH_NAME --json=id --jq '.[].id' --status=in_progress
+          flows = []
+          %w(in_progress queued requested waiting pending).each do |status|
+            res = `gh run list --workflow=#{workflow}.yml --branch=#{branch} --json=databaseId --jq '.[].databaseId' --status=#{status}`
+            flows += res.split("\n").map(&:strip).reject(&:empty?)
+          end
+          flows.each do |id|
+            info "Canceling run #{id} for workflow #{workflow}"
+            system "gh", "run", "cancel", id
+          end
+        end
+      end
+    end
+  end
 end
