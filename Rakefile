@@ -1,7 +1,6 @@
 require 'common'
 require "json"
 require 'active_support/time'
-require_relative "../RandomScripts/jira"
 
 def determine_dev_branch
   if Git.branch_exists "master"

@@ -1,5 +1,3 @@
-require_relative "../../RandomScripts/jira"
-
 namespace :jira do
     def extract_jira_issues(message)
       message.scan(/CC-\d+/)
