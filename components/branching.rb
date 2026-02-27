@@ -209,11 +209,6 @@ namespace :br do
       system "git", "checkout", "production"
       if to_branch(branch)
         system "git", "checkout", branch
-        if to_branch($dev_branch)
-          system "git", "checkout", branch
-        else
-          error "merge failed"
-        end
       else
         error "merge failed"
       end
@@ -243,5 +238,22 @@ namespace :br do
     Git.push
     system "git", "checkout", @current
     system "git", "stash", "pop"
+  end
+
+  desc "Request review for the PR"
+  task to_testing: :before do |task, args|
+    pr_number = args.extras[0]
+    if pr_number.nil?
+      warning "No PR number provided, trying to find one for the current branch"
+      pr_number = GitHub.get_pr_number(Git.current_branch)
+      if pr_number.nil?
+        error "No PR found for the current branch #{Git.current_branch}"
+        next
+      end
+    end
+    TRAIN.if_connectable do |conn|
+      conn.send_request("command", {input: "to_testing #{Git.repo_name_with_org} #{pr_number}"})
+    end
+    info "Queued move of PR ##{pr_number} to dev"
   end
 end

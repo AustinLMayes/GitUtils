@@ -16,19 +16,51 @@ namespace :stacking do
     branches.each do |branch|
       system "git", "checkout", branch
       Git.ensure_clean
-      create_stacked_prs(base_stacking_branch)
+      create_stacked_prs(base_stacking_branch, branch)
       system "git", "checkout", branch
       Git.push(force: true)
     end
     system "git checkout #{current}"
   end
 
-  def create_stacked_prs(base)
+  desc "Request review for the first stacked PR"
+  task to_testing: :before do |task, args|
+    branches = [Git.current_branch]
+    unless args.extras[0].nil?
+      branches = Git.find_branches_multi(args.extras)
+    end
+    branches.each do |branch|
+      system "git", "checkout", branch
+      first = get_first_commit(base_stacking_branch)
+      next if first.nil?
+      system "git", "checkout", $dev_branch
+      Git.ensure_clean
+      unless system "git", "cherry-pick", "--empty=drop", "--strategy=recursive", "-X theirs", first
+        system "git", "cherry-pick", "--abort"
+        system "git", "checkout", branch
+        error "Cherry-pick failed"
+      end
+      Git.push
+      system "git", "checkout", branch
+      Git.ensure_clean
+      pr_number = get_first_stacked_pr_number(base_stacking_branch)
+      if pr_number.nil?
+        warning "No stacked PR found for branch #{branch}"
+      else
+        TRAIN.if_connectable do |conn|
+          conn.send_request("command", {input: "to_testing #{Git.repo_name_with_org} #{pr_number}"})
+        end
+        info "Moved PR ##{pr_number} to dev"
+      end
+    end
+  end
+
+  def create_stacked_prs(base, parent)
     info "Creating stacked PRs for #{base}..#{Git.current_branch}"
     commits = Git.my_commits_between(base, Git.current_branch, "austin")
     branches = []
     info "Creating PRs for #{commits.length} commits"
-    max_commits = ENV["MAX_STACKED_COMMITS"] ? ENV["MAX_STACKED_COMMITS"].to_i : 50
+    max_commits = ENV["MAX_STACKED_COMMITS"] ? ENV["MAX_STACKED_COMMITS"].to_i : 5
     commits.each_with_index do |commit, index|
       if index >= max_commits
         warning "Reached maximum of #{max_commits} stacked commits, stopping"
@@ -42,12 +74,32 @@ namespace :stacking do
       error "Failed to push" unless system "git push --force --atomic --no-verify origin #{commit}:refs/heads/#{branch}"
       pr = GitHub.get_pr_number(branch)
       if pr.nil?
-        GitHub.make_pr(friendly_msg, base: base, head: branch)
+        pr = GitHub.make_pr(friendly_msg, base: base, head: branch)
+      else
+        GitHub.change_pr_base(branch, base)
+        GitHub.change_pr_title(branch, friendly_msg)
       end
-      GitHub.change_pr_base(branch, base)
-      GitHub.change_pr_title(branch, friendly_msg)
+      TRAIN.if_connectable do |conn|
+        conn.send_request("command", {input: "add #{parent} #{Git.repo_name_with_org} #{pr}"})
+        conn.send_request("command", {input: "move #{parent} #{Git.repo_name_with_org} #{pr} #{index}"})
+        conn.send_request("command", {input: "unpause #{Git.repo_name_with_org} #{pr}"})
+      end
       base = branch
     end
+  end
+
+  def get_first_stacked_pr_number(base)
+    first_commit = get_first_commit(base)
+    return nil if first_commit.nil?
+    msg = `git log -1 --pretty=format:%s #{first_commit}`
+    branch = msg.split(" ").first
+    branch = "austin/#{branch}" unless branch.start_with?("austin/")
+    GitHub.get_pr_number(branch)
+  end
+
+  def get_first_commit(base)
+    commits = Git.my_commits_between(base, Git.current_branch, "austin")
+    commits.empty? ? nil : commits.first
   end
 
   desc "Run ./gradlew classes on all commits in the current branch"

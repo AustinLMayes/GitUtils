@@ -27,13 +27,6 @@ namespace :prs do
         end
     end
 
-    desc "Mark a PR as ready for review"
-    task :ready do |task, args|
-        `gh pr ready`
-        sleep 5
-        `gh pr merge --auto --merge`
-    end
-
     def make_prs(title)
         res = GitHub.make_pr(title, suffix: "")
 

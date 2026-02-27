@@ -2,6 +2,8 @@ require 'common'
 require "json"
 require 'active_support/time'
 
+TRAIN = ExternalServer.new("localhost", 4567)
+
 def determine_dev_branch
   if Git.branch_exists "master"
     "master"
