@@ -71,7 +71,7 @@ namespace :ustacking do
         if pushed
           pr = GitHub.get_pr_number(branch)
           if pr.nil?
-            pr = GitHub.make_pr(friendly_msg, base: base, head: branch)
+            pr = GitHub.make_pr(friendly_msg, base: base, head: branch, train: parent)
           else
             GitHub.change_pr_title(branch, friendly_msg)
             GitHub.change_pr_base(branch, base)

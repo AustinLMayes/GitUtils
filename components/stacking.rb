@@ -74,7 +74,7 @@ namespace :stacking do
       error "Failed to push" unless system "git push --force --atomic --no-verify origin #{commit}:refs/heads/#{branch}"
       pr = GitHub.get_pr_number(branch)
       if pr.nil?
-        pr = GitHub.make_pr(friendly_msg, base: base, head: branch)
+        pr = GitHub.make_pr(friendly_msg, base: base, head: branch, train: parent)
       else
         GitHub.change_pr_base(branch, base)
         GitHub.change_pr_title(branch, friendly_msg)
