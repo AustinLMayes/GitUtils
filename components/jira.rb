@@ -33,9 +33,9 @@ namespace :jira do
         end
         Jira::Issues.transitions(jira)["transitions"].each do |transition|
           next unless transition["isAvailable"] == true
-          if transition["name"] == "Testing"
+          if transition["to"]["name"] == "Testing"
             trans_testing = transition
-          elsif transition["name"] == "Done" || transition["name"] == "Completed"
+          elsif transition["to"]["name"] == "Done" || transition["to"]["name"] == "Completed"
             trans_done = transition
           end
         end
