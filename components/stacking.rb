@@ -48,6 +48,7 @@ namespace :stacking do
         warning "No stacked PR found for branch #{branch}"
       else
         TRAIN.if_connectable do |conn|
+          conn.send_request("command", {input: "unpause #{Git.repo_name_with_org} #{pr_number}"})
           conn.send_request("command", {input: "to_testing #{Git.repo_name_with_org} #{pr_number}"})
         end
         info "Moved PR ##{pr_number} to dev"
@@ -82,7 +83,6 @@ namespace :stacking do
       TRAIN.if_connectable do |conn|
         conn.send_request("command", {input: "add #{parent} #{Git.repo_name_with_org} #{pr}"})
         conn.send_request("command", {input: "move #{parent} #{Git.repo_name_with_org} #{pr} #{index}"})
-        conn.send_request("command", {input: "unpause #{Git.repo_name_with_org} #{pr}"})
       end
       base = branch
     end

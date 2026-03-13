@@ -41,6 +41,7 @@ namespace :ustacking do
       else
         TRAIN.if_connectable do |conn|
           conn.send_request("command", {input: "to_testing #{Git.repo_name_with_org} #{pr_number}"})
+          conn.send_request("command", {input: "unpause #{Git.repo_name_with_org} #{pr_number}"})
         end
         info "Moved PR ##{pr_number} to dev"
       end
@@ -79,7 +80,6 @@ namespace :ustacking do
           TRAIN.if_connectable do |conn|
             conn.send_request("command", {input: "add #{parent} #{Git.repo_name_with_org} #{pr}"})
             conn.send_request("command", {input: "move #{parent} #{Git.repo_name_with_org} #{pr} #{index}"})
-            conn.send_request("command", {input: "unpause #{Git.repo_name_with_org} #{pr}"})
           end
         end
         system "git checkout #{base}"
