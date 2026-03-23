@@ -35,7 +35,7 @@ namespace :stacking do
       next if first.nil?
       system "git", "checkout", $dev_branch
       Git.ensure_clean
-      unless system "git", "cherry-pick", "--empty=drop", "--strategy=recursive", "-X theirs", first
+      unless system "git", "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", first
         system "git", "cherry-pick", "--abort"
         system "git", "checkout", branch
         error "Cherry-pick failed"
