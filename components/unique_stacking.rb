@@ -1,11 +1,20 @@
 namespace :ustacking do
+  def get_unique_branches(args)
+    branches = [Git.current_branch]
+    unless args.extras[0].nil?
+      if args.extras[0] == "all" && args.extras[1].nil?
+        branches = Git.find_branches("austin/u/.*$")
+      else
+        branches = Git.find_branches_multi(args.extras)
+      end
+    end
+    branches
+  end
+
   desc "Given the diff of the current branch, create pull requests for each commit in the diff"
   task diff: :before do |task, args|
     Git.ensure_clean
-    branches = [Git.current_branch]
-    unless args.extras[0].nil?
-      branches = Git.find_branches_multi(args.extras)
-    end
+    branches = get_unique_branches(args)
     branches.each do |branch|
       system "git", "checkout", branch
       Git.ensure_clean
@@ -15,35 +24,42 @@ namespace :ustacking do
     end
   end
 
-  desc "Request review for the first stacked PR"
+  desc "Request review for the first 5 (or MAX_STACKED_COMMITS) commits in the current branch, or the branches specified as arguments"
   task to_testing: :before do |task, args|
-    branches = [Git.current_branch]
-    unless args.extras[0].nil?
-      branches = Git.find_branches_multi(args.extras)
-    end
+    branches = get_unique_branches(args)
     branches.each do |branch|
       system "git", "checkout", branch
-      first = get_first_commit(base_stacking_branch)
-      next if first.nil?
+      max_stacked = ENV["MAX_STACKED_COMMITS"] ? ENV["MAX_STACKED_COMMITS"].to_i : 5
+      commits = Git.my_commits_between("production", Git.current_branch, "austin")
+      if commits.length > max_stacked
+        warning "Branch #{branch} has #{commits.length} commits, which exceeds the maximum of #{max_stacked} stacked commits. Only the first #{max_stacked} commits will be included in the stacked PRs."
+        commits = commits[0...max_stacked]
+      end
+      next if commits.empty?
       system "git", "checkout", $dev_branch
       Git.ensure_clean
-      unless system "git", "cherry-pick", "--empty=drop", "--strategy=recursive", "-X theirs", first
-        system "git", "cherry-pick", "--abort"
-        system "git", "checkout", branch
-        error "Cherry-pick failed"
+      Git.pull_branches($dev_branch)
+      commits.each do |commit|
+        unless system "git", "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", commit
+          system "git", "cherry-pick", "--abort"
+          system "git", "checkout", branch
+          error "Cherry-pick failed"
+        end
       end
       Git.push
       system "git", "checkout", branch
       Git.ensure_clean
-      pr_number = get_first_unique_stacked_pr_number("production")
-      if pr_number.nil?
-        warning "No stacked PR found for branch #{branch}"
-      else
-        TRAIN.if_connectable do |conn|
-          conn.send_request("command", {input: "to_testing #{Git.repo_name_with_org} #{pr_number}"})
-          conn.send_request("command", {input: "unpause #{Git.repo_name_with_org} #{pr_number}"})
+      commits.each do |commit|
+        pr_number = get_pr_number("production", commit)
+        if pr_number.nil?
+          warning "No stacked PR found for branch #{branch} and commit #{commit}, skipping"
+        else
+          TRAIN.if_connectable do |conn|
+            conn.send_request("command", {input: "to_testing #{Git.repo_name_with_org} #{pr_number}"})
+            conn.send_request("command", {input: "unpause #{Git.repo_name_with_org} #{pr_number}"})
+          end
+          info "Moved PR ##{pr_number} to dev"
         end
-        info "Moved PR ##{pr_number} to dev"
       end
     end
   end
@@ -71,15 +87,16 @@ namespace :ustacking do
         pushed = system "git push --force --atomic --no-verify origin #{tmp_branch}:refs/heads/#{branch}"
         if pushed
           pr = GitHub.get_pr_number(branch)
+          train = parent + "-" + branch.split("/").last
           if pr.nil?
-            pr = GitHub.make_pr(friendly_msg, base: base, head: branch, train: parent)
+            pr = GitHub.make_pr(friendly_msg, base: base, head: branch, train: train)
           else
             GitHub.change_pr_title(branch, friendly_msg)
             GitHub.change_pr_base(branch, base)
           end
           TRAIN.if_connectable do |conn|
-            conn.send_request("command", {input: "add #{parent} #{Git.repo_name_with_org} #{pr}"})
-            conn.send_request("command", {input: "move #{parent} #{Git.repo_name_with_org} #{pr} #{index}"})
+            conn.send_request("command", {input: "add #{train} #{Git.repo_name_with_org} #{pr}"})
+            conn.send_request("command", {input: "move #{train} #{Git.repo_name_with_org} #{pr} #{index}"})
           end
         end
         system "git checkout #{base}"
@@ -93,10 +110,8 @@ namespace :ustacking do
     end
   end
 
-  def get_first_unique_stacked_pr_number(base)
-    first_commit = get_first_commit(base)
-    return nil if first_commit.nil?
-    msg = `git log -1 --pretty=format:%s #{first_commit}`
+  def get_pr_number(base, commit)
+    msg = `git log -1 --pretty=format:%s #{commit}`
     branch = msg.split(" ").first
     branch = "austin/#{branch}" unless branch.start_with?("austin/")
     GitHub.get_pr_number(branch)
@@ -109,10 +124,7 @@ namespace :ustacking do
 
   desc "Run ./gradlew classes on all commits in the current branch"
   task build: :before do |task, args|
-    branches = [Git.current_branch]
-    unless args.extras[0].nil?
-      branches = Git.find_branches_multi(args.extras)
-    end
+    branches = get_unique_branches(args)
     error "No branches found" if branches.empty?
     Git.find_branches("tmp/ustack/test-").each do |tmp|
       info "Deleting temporary branch #{tmp}"

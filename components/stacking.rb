@@ -3,14 +3,23 @@ namespace :stacking do
     ENV["MAIN_BRANCH"] || "production"
   end
 
+  def get_branches(args)
+    branches = [Git.current_branch]
+    unless args.extras[0].nil?
+      if args.extras[0] == "all" && args.extras[1].nil?
+        branches = Git.find_branches("austin/[^u][^/]*$")
+      else
+        branches = Git.find_branches_multi(args.extras)
+      end
+    end
+    branches
+  end
+
   desc "Given the diff of the current branch, create pull requests for each commit in the diff"
   task diff: :before do |task, args|
     current = Git.current_branch
     Git.ensure_clean
-    branches = [Git.current_branch]
-    unless args.extras[0].nil?
-      branches = Git.find_branches_multi(args.extras)
-    end
+    branches = get_branches(args)
     system "git checkout #{base_stacking_branch}"
     system "git pull"
     branches.each do |branch|
@@ -25,10 +34,7 @@ namespace :stacking do
 
   desc "Request review for the first stacked PR"
   task to_testing: :before do |task, args|
-    branches = [Git.current_branch]
-    unless args.extras[0].nil?
-      branches = Git.find_branches_multi(args.extras)
-    end
+    branches = get_branches(args)
     branches.each do |branch|
       system "git", "checkout", branch
       first = get_first_commit(base_stacking_branch)
@@ -104,10 +110,7 @@ namespace :stacking do
 
   desc "Run ./gradlew classes on all commits in the current branch"
   task build: :before do |task, args|
-    branches = [Git.current_branch]
-    unless args.extras[0].nil?
-      branches = Git.find_branches_multi(args.extras)
-    end
+    branches = get_branches(args)
     branches.each do |branch|
       Git.ensure_clean
       system "git", "checkout", branch
@@ -128,10 +131,7 @@ namespace :stacking do
       info "No PRs found"
       return
     end
-    branches = [Git.current_branch]
-    unless args.extras[0].nil?
-      branches = Git.find_branches_multi(args.extras)
-    end
+    branches = get_branches(args)
     info "Validating #{prs.length} PRs"
     commit_branches = []
     branches.each do |branch|
