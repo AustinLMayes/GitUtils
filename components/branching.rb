@@ -42,7 +42,7 @@ namespace :br do
 
   desc "Push all of the selected branches"
   task push_all: :before do |task, args|
-    push_all *args.extras
+    push_all *get_non_stacked_branches(args), $dev_branch
   end
 
   def push_all(*branches, force: false)
@@ -242,18 +242,25 @@ namespace :br do
 
   desc "Request review for the PR"
   task to_testing: :before do |task, args|
-    pr_number = args.extras[0]
-    if pr_number.nil?
-      warning "No PR number provided, trying to find one for the current branch"
-      pr_number = GitHub.get_pr_number(Git.current_branch)
+    branches = get_non_stacked_branches(args)
+    nums = []
+    branches.each do |branch|
+      pr_number = GitHub.get_pr_number(branch)
       if pr_number.nil?
-        error "No PR found for the current branch #{Git.current_branch}"
+        warning "No PR found for the current branch #{branch}, skipping"
         next
       end
+      nums << pr_number
     end
-    TRAIN.if_connectable do |conn|
-      conn.send_request("command", {input: "to_testing #{Git.repo_name_with_org} #{pr_number}"})
+    if nums.empty?
+      warning "No PRs found for any of the branches, skipping"
+    else
+      TRAIN.if_connectable do |conn|
+        nums.each do |num|
+          conn.send_request("command", {input: "to_testing #{Git.repo_name_with_org} #{num}"})
+          info "Queued move of PR ##{num} to dev"
+        end
+      end
     end
-    info "Queued move of PR ##{pr_number} to dev"
   end
 end
