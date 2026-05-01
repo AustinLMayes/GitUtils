@@ -75,9 +75,10 @@ namespace :ustacking do
         warning "Reached maximum of #{max_commits} stacked commits, stopping"
         break
       end
-      msg = `git log -1 --pretty=format:%s #{commit}`
-      friendly_msg = msg.split("\n").first.split(" ")[1..-1].join(" ")
-      branch = msg.split(" ").first
+      msg = Git.commit_message(commit)
+      friendly_msg = msg[:title].split(" ")[1..-1].join(" ")
+      body = msg[:body]
+      branch = msg[:title].split(" ").first
       branch = "austin/#{branch}" unless branch.start_with?("austin/")
       tmp_branch = "tmp/#{branch.gsub('/', '_')}_#{Time.now.to_i}"
       branches << branch
@@ -89,10 +90,11 @@ namespace :ustacking do
           pr = GitHub.get_pr_number(branch)
           train = parent + "-" + branch.split("/").last
           if pr.nil?
-            pr = GitHub.make_pr(friendly_msg, base: base, head: branch, train: train)
+            pr = GitHub.make_pr(friendly_msg, base: base, head: branch, train: train, body: body)
           else
             GitHub.change_pr_title(branch, friendly_msg)
             GitHub.change_pr_base(branch, base)
+            GitHub.change_pr_body(branch, body)
           end
           TRAIN.if_connectable do |conn|
             conn.send_request("command", {input: "add #{train} #{Git.repo_name_with_org} #{pr}"})
@@ -157,6 +159,7 @@ namespace :ustacking do
           warning "Cherry-pick failed for commit #{commit} in branch #{tmp}"
           failed << commit
         end
+        system "git", "reset", "--hard", "production"
         system "git", "checkout", branch
         system "git", "branch", "-D", tmp
       end

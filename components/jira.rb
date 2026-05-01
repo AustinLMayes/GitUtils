@@ -6,8 +6,8 @@ namespace :jira do
     PASSED_QA = "10056"
 
     def transition_issues(sha, comment: nil, done: false, ensure_mine: false)
-      message_full = `git log --format=%B -n 1 #{sha}`.strip.split("\n")
-      message = message_full.first
+      message_full = Git.commit_message(sha)
+      message = message_full.values.join(" ")
       if message.start_with?("Merge pull request")
         pr_number = message.split(" ")[3].gsub("#", "")
         message = `gh pr view #{pr_number} --json title,body --jq '.title + \"\\n\" + .body'`.strip

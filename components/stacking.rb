@@ -7,7 +7,7 @@ namespace :stacking do
     branches = [Git.current_branch]
     unless args.extras[0].nil?
       if args.extras[0] == "all" && args.extras[1].nil?
-        branches = Git.find_branches("austin/[^u][^/]*$")
+        branches = Git.find_branches("austin/s/.*$")
       else
         branches = Git.find_branches_multi(args.extras)
       end
@@ -37,11 +37,14 @@ namespace :stacking do
     branches = get_branches(args)
     branches.each do |branch|
       system "git", "checkout", branch
-      first = get_first_commit(base_stacking_branch)
-      next if first.nil?
+      commits = Git.my_commits_between(base_stacking_branch, branch, "austin")
+      next if commits.empty?
+      to_move = ENV["MAX_TESTING_COMMITS"] ? ENV["MAX_TESTING_COMMITS"].to_i : 1
+      to_move = [to_move, commits.length].min
+      commits = commits[0...to_move]
       system "git", "checkout", $dev_branch
       Git.ensure_clean
-      unless system "git", "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", first
+      unless system "git", "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", *commits
         system "git", "cherry-pick", "--abort"
         system "git", "checkout", branch
         error "Cherry-pick failed"
@@ -49,15 +52,21 @@ namespace :stacking do
       Git.push
       system "git", "checkout", branch
       Git.ensure_clean
-      pr_number = get_first_stacked_pr_number(base_stacking_branch)
-      if pr_number.nil?
-        warning "No stacked PR found for branch #{branch}"
+      pr_numbers = []
+      commits.each do |commit|
+        pr_number = get_stacked_pr_number(commit)
+        pr_numbers << pr_number unless pr_number.nil?
+      end
+      if pr_numbers.empty?
+        warning "No stacked PRs found for branch #{branch}"
       else
         TRAIN.if_connectable do |conn|
-          conn.send_request("command", {input: "unpause #{Git.repo_name_with_org} #{pr_number}"})
-          conn.send_request("command", {input: "to_testing #{Git.repo_name_with_org} #{pr_number}"})
+          pr_numbers.each do |pr_number|
+            conn.send_request("command", {input: "unpause #{Git.repo_name_with_org} #{pr_number}"})
+            conn.send_request("command", {input: "to_testing #{Git.repo_name_with_org} #{pr_number}"})
+          end
         end
-        info "Moved PR ##{pr_number} to dev"
+        info "Moved PR ##{pr_numbers.join(", ")} to testing"
       end
     end
   end
@@ -73,18 +82,20 @@ namespace :stacking do
         warning "Reached maximum of #{max_commits} stacked commits, stopping"
         break
       end
-      msg = `git log -1 --pretty=format:%s #{commit}`
-      friendly_msg = msg.split("\n").first.split(" ")[1..-1].join(" ")
-      branch = msg.split(" ").first
+      msg = Git.commit_message(commit)
+      friendly_msg = msg[:title].split(" ")[1..-1].join(" ")
+      body = msg[:body]
+      branch = msg[:title].split(" ").first
       branch = "austin/#{branch}" unless branch.start_with?("austin/")
       branches << branch
       error "Failed to push" unless system "git push --force --atomic --no-verify origin #{commit}:refs/heads/#{branch}"
       pr = GitHub.get_pr_number(branch)
       if pr.nil?
-        pr = GitHub.make_pr(friendly_msg, base: base, head: branch, train: parent)
+        pr = GitHub.make_pr(friendly_msg, base: base, head: branch, train: parent, body: body)
       else
         GitHub.change_pr_base(branch, base)
         GitHub.change_pr_title(branch, friendly_msg)
+        GitHub.change_pr_body(branch, body)
       end
       TRAIN.if_connectable do |conn|
         conn.send_request("command", {input: "add #{parent} #{Git.repo_name_with_org} #{pr}"})
@@ -98,6 +109,13 @@ namespace :stacking do
     first_commit = get_first_commit(base)
     return nil if first_commit.nil?
     msg = `git log -1 --pretty=format:%s #{first_commit}`
+    branch = msg.split(" ").first
+    branch = "austin/#{branch}" unless branch.start_with?("austin/")
+    GitHub.get_pr_number(branch)
+  end
+
+  def get_stacked_pr_number(commit)
+    msg = `git log -1 --pretty=format:%s #{commit}`
     branch = msg.split(" ").first
     branch = "austin/#{branch}" unless branch.start_with?("austin/")
     GitHub.get_pr_number(branch)

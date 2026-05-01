@@ -34,6 +34,18 @@ task :before do |task, args|
   $dont_push = ENV["GUTILS_DONT_PUSH"] == "true"
 end
 
+def get_non_stacked_branches(args)
+  branches = [Git.current_branch]
+  if args.extras.length > 0
+    if args.extras[0] == "all" && args.extras[1].nil?
+      branches = Git.find_branches("^austin\\/(?![su]\\/).*")
+    else
+      branches = Git.find_branches_multi(args.extras)
+    end
+  end
+  branches
+end
+
 Dir["#{File.dirname(__FILE__)}/components/*.rb"].each { |file| load file }
 
 
