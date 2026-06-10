@@ -71,6 +71,31 @@ namespace :stacking do
     end
   end
 
+  desc "Resolve all open review conversations on every stacked PR for the given branch(es)"
+  task resolve: :before do |task, args|
+    branches = get_branches(args)
+    branches.each do |branch|
+      system "git", "checkout", branch
+      commits = Git.my_commits_between(base_stacking_branch, branch, "austin")
+      next if commits.empty?
+      pr_numbers = []
+      commits.each do |commit|
+        pr_number = get_stacked_pr_number(commit)
+        pr_numbers << pr_number unless pr_number.nil?
+      end
+      if pr_numbers.empty?
+        warning "No stacked PRs found for branch #{branch}"
+      else
+        TRAIN.if_connectable do |conn|
+          pr_numbers.each do |pr_number|
+            conn.send_request("command", {input: "resolve_conversations #{Git.repo_name_with_org} #{pr_number}"})
+          end
+        end
+        info "Queued resolve of conversations on PR ##{pr_numbers.join(", ")}"
+      end
+    end
+  end
+
   def create_stacked_prs(base, parent)
     info "Creating stacked PRs for #{base}..#{Git.current_branch}"
     commits = Git.my_commits_between(base, Git.current_branch, "austin")

@@ -14,6 +14,9 @@ namespace :prs do
             res = make_prs(Git.last_commit_message.values.join("\n"))
             if !res.nil?
                 info res
+                TRAIN.if_connectable do |conn|
+                    conn.send_request("command", {input: "add #{branch} #{Git.repo_name_with_org} #{res}"})
+                end
             end
         end
     end
@@ -22,11 +25,13 @@ namespace :prs do
     task branch: :before do |task, args|
         branches = get_non_stacked_branches(args)
         Git.act_on_branches *branches, ensure_exists: true do |branch|
-            branch = branch.split("/").last
-            branch = branch.gsub("-", " ").titleize
-            res = make_prs(branch)
+            title = branch.split("/").last.gsub("-", " ").titleize
+            res = make_prs(title)
             if !res.nil?
                 info res
+                TRAIN.if_connectable do |conn|
+                    conn.send_request("command", {input: "add #{branch} #{Git.repo_name_with_org} #{res}"})
+                end
             end
         end
     end

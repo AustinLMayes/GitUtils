@@ -64,17 +64,41 @@ namespace :ustacking do
     end
   end
 
+  desc "Resolve all open review conversations on every unique-stacked PR for the given branch(es)"
+  task resolve: :before do |task, args|
+    branches = get_unique_branches(args)
+    branches.each do |branch|
+      system "git", "checkout", branch
+      commits = Git.my_commits_between("production", branch, "austin")
+      next if commits.empty?
+      pr_numbers = []
+      commits.each do |commit|
+        pr_number = get_pr_number("production", commit)
+        if pr_number.nil?
+          warning "No stacked PR found for branch #{branch} and commit #{commit}, skipping"
+        else
+          pr_numbers << pr_number
+        end
+      end
+      if pr_numbers.empty?
+        warning "No unique-stacked PRs found for branch #{branch}"
+      else
+        TRAIN.if_connectable do |conn|
+          pr_numbers.each do |pr_number|
+            conn.send_request("command", {input: "resolve_conversations #{Git.repo_name_with_org} #{pr_number}"})
+          end
+        end
+        info "Queued resolve of conversations on PR ##{pr_numbers.join(", ")}"
+      end
+    end
+  end
+
   def create_unique_stacked_prs(base, parent)
     info "Creating UNIQUE stacked PRs for #{base}..#{Git.current_branch}"
     commits = Git.my_commits_between(base, Git.current_branch, "austin")
     branches = []
     info "Creating PRs for #{commits.length} commits"
-    max_commits = ENV["MAX_STACKED_COMMITS"] ? ENV["MAX_STACKED_COMMITS"].to_i : 5
     commits.each_with_index do |commit, index|
-      if index >= max_commits
-        warning "Reached maximum of #{max_commits} stacked commits, stopping"
-        break
-      end
       msg = Git.commit_message(commit)
       friendly_msg = msg[:title].split(" ")[1..-1].join(" ")
       body = msg[:body]
@@ -85,7 +109,18 @@ namespace :ustacking do
       info "Creating temporary branch #{tmp_branch} for commit #{commit}"
       error "Failed to create temp branch" unless system "git checkout -b #{tmp_branch} #{base}"
       if system "git cherry-pick --strategy=recursive -X theirs #{commit}"
-        pushed = system "git push --force --atomic --no-verify origin #{tmp_branch}:refs/heads/#{branch}"
+        needs_push = true
+        if system("git fetch origin #{branch}", out: File::NULL, err: File::NULL)
+          local_tree = `git rev-parse HEAD^{tree}`.strip
+          local_parent = `git rev-parse HEAD^`.strip
+          remote_tree = `git rev-parse FETCH_HEAD^{tree}`.strip
+          remote_parent = `git rev-parse FETCH_HEAD^`.strip
+          if local_tree == remote_tree && local_parent == remote_parent
+            info "Remote #{branch} already matches local cherry-pick; skipping push"
+            needs_push = false
+          end
+        end
+        pushed = needs_push ? system("git push --force --atomic --no-verify origin #{tmp_branch}:refs/heads/#{branch}") : true
         if pushed
           pr = GitHub.get_pr_number(branch)
           train = parent + "-" + branch.split("/").last
