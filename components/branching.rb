@@ -263,4 +263,28 @@ namespace :br do
       end
     end
   end
+
+  desc "Resolve all open review conversations on the PR"
+  task resolve: :before do |task, args|
+    branches = get_non_stacked_branches(args)
+    nums = []
+    branches.each do |branch|
+      pr_number = GitHub.get_pr_number(branch)
+      if pr_number.nil?
+        warning "No PR found for the current branch #{branch}, skipping"
+        next
+      end
+      nums << pr_number
+    end
+    if nums.empty?
+      warning "No PRs found for any of the branches, skipping"
+    else
+      TRAIN.if_connectable do |conn|
+        nums.each do |num|
+          conn.send_request("command", {input: "resolve_conversations #{Git.repo_name_with_org} #{num}"})
+          info "Queued resolve of conversations on PR ##{num}"
+        end
+      end
+    end
+  end
 end
