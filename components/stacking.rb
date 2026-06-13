@@ -1,3 +1,33 @@
+# Source-commit -> { commit:, branch:, message: }. First whitespace-token of
+# the subject becomes the sub-branch suffix; the rest becomes the PR title.
+def plan_stacked_entry(commit)
+  msg = Git.commit_message(commit)
+  subject = msg[:title].to_s.strip
+  body = msg[:body].to_s
+  parts = subject.split(/\s+/, 2)
+  first_token = parts[0].to_s
+  rest = parts[1].to_s.strip
+  if first_token.empty? || rest.empty?
+    error "Commit #{commit[0, 10]} has subject #{subject.inspect}; expected `<first-token> <rest>` (e.g. `ab/lol Some change`)"
+  end
+  branch = "stacks/austin/#{first_token}"
+  message = body.strip.empty? ? rest : "#{rest}\n\n#{body}"
+  { commit: commit, branch: branch, message: message }
+end
+
+# Skip-condition for the cherry-pick + amend rebuild on subsequent runs.
+def stacked_branch_up_to_date?(branch, source_commit, expected_message, parent_branch)
+  return false unless Git.branch_exists(branch)
+  branch_tree = `git rev-parse #{branch}^{tree} 2>/dev/null`.strip
+  source_tree = `git rev-parse #{source_commit}^{tree} 2>/dev/null`.strip
+  return false if branch_tree.empty? || branch_tree != source_tree
+  parent_tip = `git rev-parse #{parent_branch} 2>/dev/null`.strip
+  branch_parent_tip = `git rev-parse #{branch}^ 2>/dev/null`.strip
+  return false if parent_tip.empty? || parent_tip != branch_parent_tip
+  branch_message = `git log -1 --pretty=%B #{branch}`.strip
+  branch_message == expected_message.strip
+end
+
 namespace :stacking do
   def base_stacking_branch
     ENV["MAIN_BRANCH"] || "production"
@@ -39,9 +69,6 @@ namespace :stacking do
       system "git", "checkout", branch
       commits = Git.my_commits_between(base_stacking_branch, branch, "austin")
       next if commits.empty?
-      to_move = ENV["MAX_TESTING_COMMITS"] ? ENV["MAX_TESTING_COMMITS"].to_i : 1
-      to_move = [to_move, commits.length].min
-      commits = commits[0...to_move]
       system "git", "checkout", $dev_branch
       Git.ensure_clean
       unless system "git", "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", *commits
@@ -96,54 +123,98 @@ namespace :stacking do
     end
   end
 
-  def create_stacked_prs(base, parent)
-    info "Creating stacked PRs for #{base}..#{Git.current_branch}"
-    commits = Git.my_commits_between(base, Git.current_branch, "austin")
-    branches = []
-    info "Creating PRs for #{commits.length} commits"
-    max_commits = ENV["MAX_STACKED_COMMITS"] ? ENV["MAX_STACKED_COMMITS"].to_i : 5
-    commits.each_with_index do |commit, index|
-      if index >= max_commits
-        warning "Reached maximum of #{max_commits} stacked commits, stopping"
-        break
+  desc "Assign reviewers (team / person shorthands) to every PR in the current stack via PRTrain"
+  task :assign, [:handles] => :before do |task, args|
+    handles = [args[:handles], *args.extras].compact.reject(&:empty?)
+    raise "Usage: stacking:assign[<handle>[,<handle>...]]" if handles.empty?
+    Reviewers.expand_all(handles, org: Git.repo_org) # raises on typo
+    branch = Git.current_branch
+    commits = Git.my_commits_between(base_stacking_branch, branch, "austin")
+    if commits.empty?
+      warning "No stacked commits between #{base_stacking_branch} and #{branch}; nothing to assign"
+      next
+    end
+    pr_numbers = commits.filter_map { |c| get_stacked_pr_number(c) }
+    if pr_numbers.empty?
+      warning "Found #{commits.length} stacked commits but no PRs for any of them"
+      next
+    end
+    TRAIN.if_connectable do |conn|
+      pr_numbers.each do |pr_number|
+        conn.send_request("command", {input: "assign #{Git.repo_name_with_org} #{pr_number} #{handles.join(' ')}"})
       end
-      msg = Git.commit_message(commit)
-      friendly_msg = msg[:title].split(" ")[1..-1].join(" ")
-      body = msg[:body]
-      branch = msg[:title].split(" ").first
-      branch = "austin/#{branch}" unless branch.start_with?("austin/")
-      branches << branch
-      error "Failed to push" unless system "git push --force --atomic --no-verify origin #{commit}:refs/heads/#{branch}"
-      pr = GitHub.get_pr_number(branch)
-      if pr.nil?
-        pr = GitHub.make_pr(friendly_msg, base: base, head: branch, train: parent, body: body)
+    end
+    info "Queued reviewer assignment for #{pr_numbers.length} stacked PR(s): ##{pr_numbers.join(', ')}"
+  end
+
+  def create_stacked_prs(base, parent)
+    source_branch = Git.current_branch
+    info "Creating stacked PRs for #{base}..#{source_branch}"
+    commits = Git.my_commits_between(base, source_branch, "austin")
+    if commits.empty?
+      warning "No stacked commits between #{base} and #{source_branch}"
+      return
+    end
+
+    plan = commits.map { |commit| plan_stacked_entry(commit) }
+
+    # gt's stack diff is computed against this base, so fetch it fresh.
+    system "git", "fetch", "origin", base
+
+    info "Materializing #{plan.length} stacked branch(es) and tracking them in Graphite"
+    prev_branch = base
+    plan.each do |entry|
+      if stacked_branch_up_to_date?(entry[:branch], entry[:commit], entry[:message], prev_branch)
+        info "#{entry[:branch]} already matches source commit on top of #{prev_branch}; skipping rebuild"
+        system "git", "checkout", entry[:branch]
       else
-        GitHub.change_pr_base(branch, base)
-        GitHub.change_pr_title(branch, friendly_msg)
-        GitHub.change_pr_body(branch, body)
+        system "git", "branch", "-D", entry[:branch], out: File::NULL, err: File::NULL if Git.branch_exists(entry[:branch])
+        error "Failed to create #{entry[:branch]}" unless system("git", "checkout", "-b", entry[:branch], prev_branch)
+        unless system("git", "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", entry[:commit])
+          system "git", "cherry-pick", "--abort"
+          error "Cherry-pick failed for #{entry[:commit]} → #{entry[:branch]}"
+        end
+        error "Failed to amend commit message for #{entry[:branch]}" unless system("git", "commit", "--amend", "-m", entry[:message])
+      end
+      system("gt", "track", "--parent", prev_branch, "--no-interactive", out: File::NULL, err: File::NULL)
+      prev_branch = entry[:branch]
+    end
+
+    # --force overrides graphite's "remote SHA changed under you" guard —
+    # safe here because we own these sub-branches and the local rebuild is
+    # always the source of truth.
+    info "Submitting stack via Graphite"
+    begin
+      Graphite.submit(stack: true, force: true)
+    rescue Graphite::Error => e
+      system "git", "checkout", source_branch
+      error "gt submit --stack failed: #{e.message}"
+    end
+
+    system "git", "checkout", source_branch
+
+    pr_numbers_by_branch = Graphite.local_pr_numbers
+    plan.each_with_index do |entry, index|
+      pr_number = pr_numbers_by_branch[entry[:branch]]
+      if pr_number.nil?
+        warning "No PR number found for #{entry[:branch]} in .graphite_pr_info — skipping train registration"
+        next
       end
       TRAIN.if_connectable do |conn|
-        conn.send_request("command", {input: "add #{parent} #{Git.repo_name_with_org} #{pr}"})
-        conn.send_request("command", {input: "move #{parent} #{Git.repo_name_with_org} #{pr} #{index}"})
+        conn.send_request("command", {input: "add #{parent} #{Git.repo_name_with_org} #{pr_number}"})
+        conn.send_request("command", {input: "move #{parent} #{Git.repo_name_with_org} #{pr_number} #{index}"})
       end
-      base = branch
     end
   end
 
   def get_first_stacked_pr_number(base)
     first_commit = get_first_commit(base)
     return nil if first_commit.nil?
-    msg = `git log -1 --pretty=format:%s #{first_commit}`
-    branch = msg.split(" ").first
-    branch = "austin/#{branch}" unless branch.start_with?("austin/")
-    GitHub.get_pr_number(branch)
+    get_stacked_pr_number(first_commit)
   end
 
   def get_stacked_pr_number(commit)
-    msg = `git log -1 --pretty=format:%s #{commit}`
-    branch = msg.split(" ").first
-    branch = "austin/#{branch}" unless branch.start_with?("austin/")
-    GitHub.get_pr_number(branch)
+    Graphite.local_pr_numbers[plan_stacked_entry(commit)[:branch]]
   end
 
   def get_first_commit(base)
@@ -169,13 +240,13 @@ namespace :stacking do
   
   desc "Find orphaned PRs"
   task orphaned: :before do |task, args|
-    prs = GitHub.get_my_prs
-    if prs.nil? || prs.empty?
-      info "No PRs found"
+    prs_by_branch = Graphite.local_pr_numbers
+    if prs_by_branch.empty?
+      info "No PRs found in .graphite_pr_info"
       return
     end
     branches = get_branches(args)
-    info "Validating #{prs.length} PRs"
+    info "Validating #{prs_by_branch.length} PRs"
     commit_branches = []
     branches.each do |branch|
       system "git", "checkout", branch
@@ -184,22 +255,22 @@ namespace :stacking do
       commit_branches += commits.map do |commit|
         msg = `git log -1 --pretty=format:%s #{commit}`
         branch = msg.split(" ").first
-        branch = "austin/#{branch}" unless branch.start_with?("austin/")
-        branch
+        branch.start_with?("austin/") ? branch : "austin/#{branch}"
       end
     end
     commit_branches = commit_branches.uniq
-    found_prs = prs.select {|pr| commit_branches.include? pr[:branch] }
-    not_found_prs = prs.select {|pr| !commit_branches.include? pr[:branch] }
-    not_found_commits = commit_branches.select { |branch| prs.none? { |pr| pr[:branch] == branch } }
-    not_found_prs.each do |pr|
-      warning "Found orphaned PR #{pr[:url]} for branch #{pr[:branch]}"
+    pr_branches = prs_by_branch.keys
+    found = pr_branches & commit_branches
+    orphaned_prs = pr_branches - commit_branches
+    orphaned_commits = commit_branches - pr_branches
+    orphaned_prs.each do |branch|
+      warning "Found orphaned PR ##{prs_by_branch[branch]} for branch #{branch}"
     end
-    not_found_commits.each do |branch|
-      warning "Found orphaned commit #{branch} for branch #{branch}"
+    orphaned_commits.each do |branch|
+      warning "Found orphaned commit branch #{branch} with no PR"
     end
-    found_prs.each do |pr|
-      info "Found PR #{pr[:url]} for branch #{pr[:branch]}"
+    found.each do |branch|
+      info "Found PR ##{prs_by_branch[branch]} for branch #{branch}"
     end
   end
 end

@@ -24,17 +24,12 @@ namespace :ustacking do
     end
   end
 
-  desc "Request review for the first 5 (or MAX_STACKED_COMMITS) commits in the current branch, or the branches specified as arguments"
+  desc "Request review for every commit on the current branch (or the branches specified as arguments)"
   task to_testing: :before do |task, args|
     branches = get_unique_branches(args)
     branches.each do |branch|
       system "git", "checkout", branch
-      max_stacked = ENV["MAX_STACKED_COMMITS"] ? ENV["MAX_STACKED_COMMITS"].to_i : 5
       commits = Git.my_commits_between("production", Git.current_branch, "austin")
-      if commits.length > max_stacked
-        warning "Branch #{branch} has #{commits.length} commits, which exceeds the maximum of #{max_stacked} stacked commits. Only the first #{max_stacked} commits will be included in the stacked PRs."
-        commits = commits[0...max_stacked]
-      end
       next if commits.empty?
       system "git", "checkout", $dev_branch
       Git.ensure_clean
@@ -93,65 +88,88 @@ namespace :ustacking do
     end
   end
 
+  desc "Assign reviewers (team / person shorthands) to every PR in the current unique stack via PRTrain"
+  task :assign, [:handles] => :before do |task, args|
+    handles = [args[:handles], *args.extras].compact.reject(&:empty?)
+    raise "Usage: ustacking:assign[<handle>[,<handle>...]]" if handles.empty?
+    Reviewers.expand_all(handles, org: Git.repo_org)
+    branch = Git.current_branch
+    commits = Git.my_commits_between("production", branch, "austin")
+    if commits.empty?
+      warning "No unique-stacked commits between production and #{branch}; nothing to assign"
+      next
+    end
+    pr_numbers = commits.filter_map { |c| get_pr_number("production", c) }
+    if pr_numbers.empty?
+      warning "Found #{commits.length} unique-stacked commits but no PRs for any of them"
+      next
+    end
+    TRAIN.if_connectable do |conn|
+      pr_numbers.each do |pr_number|
+        conn.send_request("command", {input: "assign #{Git.repo_name_with_org} #{pr_number} #{handles.join(' ')}"})
+      end
+    end
+    info "Queued reviewer assignment for #{pr_numbers.length} unique-stacked PR(s): ##{pr_numbers.join(', ')}"
+  end
+
   def create_unique_stacked_prs(base, parent)
-    info "Creating UNIQUE stacked PRs for #{base}..#{Git.current_branch}"
-    commits = Git.my_commits_between(base, Git.current_branch, "austin")
-    branches = []
-    info "Creating PRs for #{commits.length} commits"
-    commits.each_with_index do |commit, index|
-      msg = Git.commit_message(commit)
-      friendly_msg = msg[:title].split(" ")[1..-1].join(" ")
-      body = msg[:body]
-      branch = msg[:title].split(" ").first
-      branch = "austin/#{branch}" unless branch.start_with?("austin/")
-      tmp_branch = "tmp/#{branch.gsub('/', '_')}_#{Time.now.to_i}"
-      branches << branch
-      info "Creating temporary branch #{tmp_branch} for commit #{commit}"
-      error "Failed to create temp branch" unless system "git checkout -b #{tmp_branch} #{base}"
-      if system "git cherry-pick --strategy=recursive -X theirs #{commit}"
-        needs_push = true
-        if system("git fetch origin #{branch}", out: File::NULL, err: File::NULL)
-          local_tree = `git rev-parse HEAD^{tree}`.strip
-          local_parent = `git rev-parse HEAD^`.strip
-          remote_tree = `git rev-parse FETCH_HEAD^{tree}`.strip
-          remote_parent = `git rev-parse FETCH_HEAD^`.strip
-          if local_tree == remote_tree && local_parent == remote_parent
-            info "Remote #{branch} already matches local cherry-pick; skipping push"
-            needs_push = false
-          end
-        end
-        pushed = needs_push ? system("git push --force --atomic --no-verify origin #{tmp_branch}:refs/heads/#{branch}") : true
-        if pushed
-          pr = GitHub.get_pr_number(branch)
-          train = parent + "-" + branch.split("/").last
-          if pr.nil?
-            pr = GitHub.make_pr(friendly_msg, base: base, head: branch, train: train, body: body)
-          else
-            GitHub.change_pr_title(branch, friendly_msg)
-            GitHub.change_pr_base(branch, base)
-            GitHub.change_pr_body(branch, body)
-          end
-          TRAIN.if_connectable do |conn|
-            conn.send_request("command", {input: "add #{train} #{Git.repo_name_with_org} #{pr}"})
-            conn.send_request("command", {input: "move #{train} #{Git.repo_name_with_org} #{pr} #{index}"})
-          end
-        end
-        system "git checkout #{base}"
-        system "git branch -D #{tmp_branch}"
-        error "Failed to push" unless pushed
+    source_branch = Git.current_branch
+    info "Creating UNIQUE stacked PRs for #{base}..#{source_branch}"
+    commits = Git.my_commits_between(base, source_branch, "austin")
+    if commits.empty?
+      warning "No commits between #{base} and #{source_branch}"
+      return
+    end
+
+    plan = commits.map { |commit| plan_stacked_entry(commit) }
+
+    system "git", "fetch", "origin", base
+
+    info "Materializing #{plan.length} unique branch(es), each parented on #{base}"
+    plan.each do |entry|
+      if stacked_branch_up_to_date?(entry[:branch], entry[:commit], entry[:message], base)
+        info "#{entry[:branch]} already matches source commit on top of #{base}; skipping rebuild"
+        system "git", "checkout", entry[:branch]
       else
-        system "git checkout #{base}"
-        system "git branch -D #{tmp_branch}"
-        error "Cherry-pick failed for commit #{commit} in branch #{tmp_branch}"
+        system "git", "branch", "-D", entry[:branch], out: File::NULL, err: File::NULL if Git.branch_exists(entry[:branch])
+        error "Failed to create #{entry[:branch]}" unless system("git", "checkout", "-b", entry[:branch], base)
+        unless system("git", "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", entry[:commit])
+          system "git", "cherry-pick", "--abort"
+          error "Cherry-pick failed for #{entry[:commit]} → #{entry[:branch]}"
+        end
+        error "Failed to amend commit message for #{entry[:branch]}" unless system("git", "commit", "--amend", "-m", entry[:message])
+      end
+      system("gt", "track", "--parent", base, "--no-interactive", out: File::NULL, err: File::NULL)
+
+      # Each ustacking sub-branch submits individually (no shared chain to
+      # bundle). --force overrides graphite's "remote SHA changed" guard.
+      begin
+        Graphite.submit(force: true)
+      rescue Graphite::Error => e
+        system "git", "checkout", source_branch
+        error "gt submit failed for #{entry[:branch]}: #{e.message}"
+      end
+    end
+
+    system "git", "checkout", source_branch
+
+    pr_numbers_by_branch = Graphite.local_pr_numbers
+    plan.each_with_index do |entry, index|
+      pr_number = pr_numbers_by_branch[entry[:branch]]
+      if pr_number.nil?
+        warning "No PR number found for #{entry[:branch]} in .graphite_pr_info — skipping train registration"
+        next
+      end
+      train = "#{parent}-#{entry[:branch].split('/').last}"
+      TRAIN.if_connectable do |conn|
+        conn.send_request("command", {input: "add #{train} #{Git.repo_name_with_org} #{pr_number}"})
+        conn.send_request("command", {input: "move #{train} #{Git.repo_name_with_org} #{pr_number} #{index}"})
       end
     end
   end
 
-  def get_pr_number(base, commit)
-    msg = `git log -1 --pretty=format:%s #{commit}`
-    branch = msg.split(" ").first
-    branch = "austin/#{branch}" unless branch.start_with?("austin/")
-    GitHub.get_pr_number(branch)
+  def get_pr_number(_base, commit)
+    Graphite.local_pr_numbers[plan_stacked_entry(commit)[:branch]]
   end
 
   def get_first_commit(base)
