@@ -99,9 +99,10 @@ namespace :r do
   end
 
   def active_runs(branch)
+    repo = Git.repo_name_with_org
     runs = []
     %w(in_progress queued requested waiting pending).each do |status|
-      res = `gh run list --branch=#{branch} --status=#{status} --json=databaseId,workflowName,status --limit=200`
+      res = `gh api 'repos/#{repo}/actions/runs?branch=#{branch}&status=#{status}&per_page=200' --jq '[.workflow_runs[] | {databaseId: .id, workflowName: .name, status: .status}]'`
       parsed = JSON.parse(res) rescue []
       runs += parsed
     end

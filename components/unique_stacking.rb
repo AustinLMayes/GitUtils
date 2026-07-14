@@ -92,7 +92,12 @@ namespace :ustacking do
   task :assign, [:handles] => :before do |task, args|
     handles = [args[:handles], *args.extras].compact.reject(&:empty?)
     raise "Usage: ustacking:assign[<handle>[,<handle>...]]" if handles.empty?
-    Reviewers.expand_all(handles, org: Git.repo_org)
+    expanded =
+      begin
+        Reviewers.expand_all(handles, org: Git.repo_org)
+      rescue Reviewers::UnknownHandle => e
+        error e.message
+      end
     branch = Git.current_branch
     commits = Git.my_commits_between("production", branch, "austin")
     if commits.empty?
@@ -106,10 +111,10 @@ namespace :ustacking do
     end
     TRAIN.if_connectable do |conn|
       pr_numbers.each do |pr_number|
-        conn.send_request("command", {input: "assign #{Git.repo_name_with_org} #{pr_number} #{handles.join(' ')}"})
+        conn.send_request("command", {input: "assign #{Git.repo_name_with_org} #{pr_number} #{expanded.join(' ')}"})
       end
     end
-    info "Queued reviewer assignment for #{pr_numbers.length} unique-stacked PR(s): ##{pr_numbers.join(', ')}"
+    info "Queued reviewer assignment for #{pr_numbers.length} unique-stacked PR(s): ##{pr_numbers.join(', ')} as #{expanded.inspect}"
   end
 
   def create_unique_stacked_prs(base, parent)

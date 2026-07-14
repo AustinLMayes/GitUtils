@@ -127,7 +127,12 @@ namespace :stacking do
   task :assign, [:handles] => :before do |task, args|
     handles = [args[:handles], *args.extras].compact.reject(&:empty?)
     raise "Usage: stacking:assign[<handle>[,<handle>...]]" if handles.empty?
-    Reviewers.expand_all(handles, org: Git.repo_org) # raises on typo
+    expanded =
+      begin
+        Reviewers.expand_all(handles, org: Git.repo_org)
+      rescue Reviewers::UnknownHandle => e
+        error e.message
+      end
     branch = Git.current_branch
     commits = Git.my_commits_between(base_stacking_branch, branch, "austin")
     if commits.empty?
@@ -141,10 +146,10 @@ namespace :stacking do
     end
     TRAIN.if_connectable do |conn|
       pr_numbers.each do |pr_number|
-        conn.send_request("command", {input: "assign #{Git.repo_name_with_org} #{pr_number} #{handles.join(' ')}"})
+        conn.send_request("command", {input: "assign #{Git.repo_name_with_org} #{pr_number} #{expanded.join(' ')}"})
       end
     end
-    info "Queued reviewer assignment for #{pr_numbers.length} stacked PR(s): ##{pr_numbers.join(', ')}"
+    info "Queued reviewer assignment for #{pr_numbers.length} stacked PR(s): ##{pr_numbers.join(', ')} as #{expanded.inspect}"
   end
 
   def create_stacked_prs(base, parent)
@@ -238,39 +243,85 @@ namespace :stacking do
     end
   end
   
-  desc "Find orphaned PRs"
-  task orphaned: :before do |task, args|
-    prs_by_branch = Graphite.local_pr_numbers
-    if prs_by_branch.empty?
-      info "No PRs found in .graphite_pr_info"
-      return
-    end
-    branches = get_branches(args)
-    info "Validating #{prs_by_branch.length} PRs"
-    commit_branches = []
-    branches.each do |branch|
+  def stacking_source_branches
+    Git.find_branches('^austin/[su]/.*$')
+  end
+
+  def stacking_base_for(branch)
+    branch.start_with?("austin/u/") ? "production" : base_stacking_branch
+  end
+
+  def expected_stacked_branch(commit)
+    subject = Git.commit_message(commit)[:title].to_s.strip
+    first_token = subject.split(/\s+/, 2)[0].to_s
+    first_token.empty? ? nil : "stacks/austin/#{first_token}"
+  end
+
+  def expected_stacked_branches
+    current = Git.current_branch
+    expected = stacking_source_branches.each_with_object([]) do |branch, acc|
+      next unless Git.branch_exists(branch)
       system "git", "checkout", branch
       Git.ensure_clean
-      commits = Git.my_commits_between(base_stacking_branch, branch, "austin")
-      commit_branches += commits.map do |commit|
-        msg = `git log -1 --pretty=format:%s #{commit}`
-        branch = msg.split(" ").first
-        branch.start_with?("austin/") ? branch : "austin/#{branch}"
+      commits = Git.my_commits_between(stacking_base_for(branch), branch, "austin")
+      acc.concat(commits.filter_map { |commit| expected_stacked_branch(commit) })
+    end.uniq
+    system "git", "checkout", current if Git.branch_exists(current)
+    expected
+  end
+
+  def orphaned_stacked_branches
+    Git.find_branches('^stacks/austin/.*$') - expected_stacked_branches
+  end
+
+  desc "Report stacks/austin/* branches and PRs that no longer back a source commit"
+  task orphaned: :before do |task, args|
+    expected = expected_stacked_branches
+    prs_by_branch = Graphite.local_pr_numbers
+    local = Git.find_branches('^stacks/austin/.*$')
+    orphaned_prs = prs_by_branch.keys - expected
+    orphaned_local = local - expected - orphaned_prs
+    found = prs_by_branch.keys & expected
+    orphaned_prs.each { |branch| warning "Orphaned PR ##{prs_by_branch[branch]} for branch #{branch}" }
+    orphaned_local.each { |branch| warning "Orphaned local stack branch #{branch} (no tracked PR)" }
+    found.each { |branch| info "PR ##{prs_by_branch[branch]} → #{branch}" }
+    info "No orphaned stack branches or PRs found" if orphaned_prs.empty? && orphaned_local.empty?
+  end
+
+  desc "Delete local stacks/austin/* branches that no longer back a source commit. Pass `remote` to also delete the pushed branch (closing its PR) and drop it from the train."
+  task prune: :before do |task, args|
+    current = Git.current_branch
+    Git.ensure_clean
+    also_remote = args.extras.include?("remote")
+    orphaned = orphaned_stacked_branches
+    if orphaned.empty?
+      info "No orphaned stack branches found"
+      next
+    end
+    prs_by_branch = Graphite.local_pr_numbers
+    warning "Found #{orphaned.length} orphaned stack branch(es):"
+    orphaned.each do |branch|
+      pr = prs_by_branch[branch]
+      warning "  #{branch}#{pr ? " (PR ##{pr})" : ""}"
+    end
+    info "Delete #{also_remote ? "these branches remotely (closing their PRs) and locally" : "these local branches (pass `remote` to also close PRs)"}? (y/n)"
+    unless STDIN.gets.to_s.strip.downcase.start_with?("y")
+      info "Aborted; nothing deleted"
+      next
+    end
+    system "git", "checkout", base_stacking_branch
+    Git.delete_branches(*orphaned, remote: also_remote)
+    if also_remote
+      pr_numbers = orphaned.filter_map { |branch| prs_by_branch[branch] }
+      unless pr_numbers.empty?
+        TRAIN.if_connectable do |conn|
+          pr_numbers.each do |pr_number|
+            conn.send_request("command", {input: "remove #{Git.repo_name_with_org} #{pr_number}"})
+          end
+        end
+        info "Removed PR ##{pr_numbers.join(", ")} from the train"
       end
     end
-    commit_branches = commit_branches.uniq
-    pr_branches = prs_by_branch.keys
-    found = pr_branches & commit_branches
-    orphaned_prs = pr_branches - commit_branches
-    orphaned_commits = commit_branches - pr_branches
-    orphaned_prs.each do |branch|
-      warning "Found orphaned PR ##{prs_by_branch[branch]} for branch #{branch}"
-    end
-    orphaned_commits.each do |branch|
-      warning "Found orphaned commit branch #{branch} with no PR"
-    end
-    found.each do |branch|
-      info "Found PR ##{prs_by_branch[branch]} for branch #{branch}"
-    end
+    system "git", "checkout", (Git.branch_exists(current) ? current : base_stacking_branch)
   end
 end
