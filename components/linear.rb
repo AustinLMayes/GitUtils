@@ -1,62 +1,55 @@
-namespace :jira do
-    def extract_jira_issues(message)
-      message.scan(/CC-\d+/)
+namespace :linear do
+    def extract_issue_ids(message)
+      message.scan(/(?:CCENG|ROC)-\d+/)
     end
-    
-    PASSED_QA = "10056"
+
+    IN_QA_STATES = ["QA Pending", "QA In Progress", "QA Passed"].freeze
 
     def transition_issues(sha, comment: nil, done: false, ensure_mine: false)
       message_full = Git.commit_message(sha)
       message = message_full.values.join(" ")
       if message.start_with?("Merge pull request")
         pr_number = message.split(" ")[3].gsub("#", "")
-        message = `gh pr view #{pr_number} --json title,body --jq '.title + \"\\n\" + .body'`.strip
+        message = `gh api repos/#{Git.repo_name_with_org}/pulls/#{pr_number} --jq '.title + \"\\n\" + .body'`.strip
       end
-      jiras = extract_jira_issues(message)
+      ids = extract_issue_ids(message)
       transitioned = []
-      jiras.each do |jira|
-        issue_done = done
-        trans_testing = nil
-        trans_done = nil
-        fields = Jira::Issues.get(jira)["fields"]
+      ids.each do |id|
+        issue = Linear::Issues.get(id)
+        if issue.nil?
+          warning "Skipping #{id} - not found in Linear"
+          next
+        end
         if ensure_mine
-          if fields['assignee'].nil? || fields['assignee']['emailAddress'] != "austin@ziax.com"
-            warning "Skipping #{jira} as it is not assigned to me (#{fields['assignee']['emailAddress']})"
+          email = issue.dig("assignee", "email")
+          if email != "austin@ziax.com"
+            warning "Skipping #{id} as it is not assigned to me (#{email.inspect})"
             next
           end
         end
-        id = fields['status']['id']
-        status = fields['status']['name']
-        if status == "Done" || (!issue_done && (status == "Testing" || id == PASSED_QA)) || status == "Completed"
-          info "Skipping #{jira} as it is already #{status}. Done=#{issue_done}"
+        status = issue.dig("state", "name")
+        if status == "Done"
+          info "Skipping #{id} as it is already #{status}."
           next
         end
-        Jira::Issues.transitions(jira)["transitions"].each do |transition|
-          next unless transition["isAvailable"] == true
-          if transition["to"]["name"] == "Testing"
-            trans_testing = transition
-          elsif transition["to"]["name"] == "Done" || transition["to"]["name"] == "Completed"
-            trans_done = transition
+        if done
+          target = status == "QA Passed" ? "Done" : "QA Pending"
+        else
+          if IN_QA_STATES.include?(status)
+            info "Skipping #{id} as it is already #{status}."
+            next
           end
+          target = "QA Pending"
         end
-        issue_done = issue_done && (id == PASSED_QA)
-        trans_to_use = issue_done ? trans_done : trans_testing
-        trans_to_use = trans_done if trans_testing.nil? && !issue_done
-        unless trans_to_use
-          warning "No transition found for #{jira}"
-          next
-        end
-        if fields['status']['id'] != trans_to_use['to']['id']
-          Jira::Issues.transition(jira, trans_to_use['id'])
-        end
-        Jira::Issues.add_to_current_sprint(jira, Jira::CC::BOARD_ID)
-        recent_comment = TempStorage.is_stored?(jira + "-comment")
+        Linear::Issues.set_state(id, target)
+        Linear::Issues.add_to_current_cycle(id)
+        recent_comment = TempStorage.is_stored?(id + "-comment")
         if comment && !recent_comment
-          Jira::Issues.add_comment(jira, comment)
-          TempStorage.store(jira + "-comment", "true", expiry: 20.minutes)
+          Linear::Issues.add_comment(id, comment)
+          TempStorage.store(id + "-comment", "true", expiry: 20.minutes)
         end
-        info "Transitioned #{jira}"
-        transitioned << jira
+        info "Transitioned #{id} -> #{target}"
+        transitioned << id
         wait_range 5, 10
       end
       transitioned
