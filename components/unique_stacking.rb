@@ -117,6 +117,27 @@ namespace :ustacking do
     info "Queued reviewer assignment for #{pr_numbers.length} unique-stacked PR(s): ##{pr_numbers.join(', ')} as #{expanded.inspect}"
   end
 
+  desc "Mark every PR in the current unique stack as QA-bound so the train holds it until QA Passed"
+  task bind_qa: :before do |task, args|
+    branch = Git.current_branch
+    commits = Git.my_commits_between("production", branch, "austin")
+    if commits.empty?
+      warning "No unique-stacked commits between production and #{branch}; nothing to bind"
+      next
+    end
+    pr_numbers = commits.filter_map { |c| get_pr_number("production", c) }
+    if pr_numbers.empty?
+      warning "Found #{commits.length} unique-stacked commits but no PRs for any of them"
+      next
+    end
+    TRAIN.if_connectable do |conn|
+      pr_numbers.each do |pr_number|
+        conn.send_request("command", {input: "bind_qa #{Git.repo_name_with_org} #{pr_number}"})
+      end
+    end
+    info "Marked #{pr_numbers.length} unique-stacked PR(s) QA-bound: ##{pr_numbers.join(', ')}"
+  end
+
   def create_unique_stacked_prs(base, parent)
     source_branch = Git.current_branch
     info "Creating UNIQUE stacked PRs for #{base}..#{source_branch}"

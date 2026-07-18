@@ -22,6 +22,19 @@ namespace :gprs do
         info "Queued reviewer assignment for PR ##{pr_number} as #{expanded.inspect}"
     end
 
+    desc "Mark the current branch's PR as QA-bound so the train holds it until QA Passed"
+    task bind_qa: :before do |task, args|
+        branch = Git.current_branch
+        pr_number = Graphite.local_pr_numbers[branch]
+        if pr_number.nil?
+            error "No graphite-tracked PR found for #{branch} in .graphite_pr_info — submit the branch first via gprs:submit"
+        end
+        TRAIN.if_connectable do |conn|
+            conn.send_request("command", {input: "bind_qa #{Git.repo_name_with_org} #{pr_number}"})
+        end
+        info "Marked PR ##{pr_number} QA-bound"
+    end
+
     desc "Submit the current branch (or each branch in args) via Graphite"
     task submit: :before do |task, args|
         branches = get_non_stacked_branches(args)
