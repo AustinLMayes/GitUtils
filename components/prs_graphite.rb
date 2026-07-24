@@ -67,6 +67,17 @@ namespace :gprs do
         out = `gh api 'repos/#{repo}/pulls?head=#{owner}:#{branch}&state=open&per_page=1' 2>/dev/null`
         pr_number = out.strip.empty? ? nil : (JSON.parse(out).first&.dig("number"))
 
+        # WORKAROUND: `gt submit` only sets the PR title/description on creation,
+        # so an edited commit subject/body never reaches an existing PR. Force
+        # both to match the current commit (subject = title, body = body).
+        unless pr_number.nil?
+            msg = Git.last_commit_message
+            unless system("gh", "pr", "edit", pr_number.to_s, "--repo", repo,
+                          "--title", msg[:title], "--body", msg[:body], out: File::NULL, err: File::NULL)
+                warning "Failed to sync PR ##{pr_number} title/description via gh pr edit"
+            end
+        end
+
         system "git", "checkout", @current
         return pr_number
     end

@@ -186,6 +186,13 @@ namespace :ustacking do
         warning "No PR number found for #{entry[:branch]} in .graphite_pr_info — skipping train registration"
         next
       end
+      # WORKAROUND: `gt submit` only sets the PR title/description on creation,
+      # so an edited commit subject/body never reaches an existing PR. Force
+      # both to match the source commit.
+      unless system("gh", "pr", "edit", pr_number.to_s, "--repo", Git.repo_name_with_org,
+                    "--title", entry[:title], "--body", entry[:description], out: File::NULL, err: File::NULL)
+        warning "Failed to sync PR ##{pr_number} title/description via gh pr edit"
+      end
       train = "#{parent}-#{entry[:branch].split('/').last}"
       TRAIN.if_connectable do |conn|
         conn.send_request("command", {input: "add #{train} #{Git.repo_name_with_org} #{pr_number}"})

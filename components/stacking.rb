@@ -12,7 +12,7 @@ def plan_stacked_entry(commit)
   end
   branch = "stacks/austin/#{first_token}"
   message = body.strip.empty? ? rest : "#{rest}\n\n#{body}"
-  { commit: commit, branch: branch, message: message }
+  { commit: commit, branch: branch, message: message, title: rest, description: body.strip }
 end
 
 # Skip-condition for the cherry-pick + amend rebuild on subsequent runs.
@@ -225,6 +225,15 @@ namespace :stacking do
       if pr_number.nil?
         warning "No PR number found for #{entry[:branch]} in .graphite_pr_info — skipping train registration"
         next
+      end
+      # WORKAROUND: `gt submit` only sets the PR title/description on creation,
+      # so an edited commit subject/body (e.g. a reworded title or an added
+      # `Depends on …` trailer) never reaches an existing PR. Force both to
+      # match the source commit — title is the first-token-stripped subject,
+      # body is the commit body.
+      unless system("gh", "pr", "edit", pr_number.to_s, "--repo", Git.repo_name_with_org,
+                    "--title", entry[:title], "--body", entry[:description], out: File::NULL, err: File::NULL)
+        warning "Failed to sync PR ##{pr_number} title/description via gh pr edit"
       end
       TRAIN.if_connectable do |conn|
         conn.send_request("command", {input: "add #{parent} #{Git.repo_name_with_org} #{pr_number}"})
