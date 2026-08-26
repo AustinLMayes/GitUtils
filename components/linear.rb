@@ -33,7 +33,7 @@ namespace :linear do
           next
         end
         if done
-          target = status == "QA Passed" ? "Done" : "QA Pending"
+          target = "Done"
         else
           if IN_QA_STATES.include?(status)
             info "Skipping #{id} as it is already #{status}."
