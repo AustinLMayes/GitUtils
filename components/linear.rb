@@ -1,6 +1,6 @@
 namespace :linear do
     def extract_issue_ids(message)
-      message.scan(/(?:CCENG|ROC)-\d+/)
+      Linear.issue_ids(message)
     end
 
     IN_QA_STATES = ["QA Pending", "QA In Progress", "QA Passed"].freeze
