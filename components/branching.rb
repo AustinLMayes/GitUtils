@@ -55,6 +55,20 @@ namespace :br do
     system "git", "checkout", @current
   end
 
+  desc "Force push the selected austin/* branches"
+  task force_push_all: :before do |task, args|
+    branches = get_non_stacked_branches(args)
+    # Hard guard, not a filter of convenience: only the `all` selector is
+    # constrained to austin/*, while an explicit pattern resolves to whatever it
+    # matches and no args at all falls back to the current branch, which may well
+    # be production or master. Force pushing is only ever safe on my own
+    # branches, so drop everything else and say what was dropped. The start
+    # anchor is also what keeps graphite's stacks/austin/* out.
+    skipped = branches.reject { |branch| branch.start_with?("austin/") }
+    warning "Refusing to force push #{skipped.join(", ")}" unless skipped.empty?
+    push_all *(branches - skipped), force: true
+  end
+
   desc "Pull all of the base branches"
   task pull_base: :before do |task, args|
     system "git", "stash"
