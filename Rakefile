@@ -2,7 +2,25 @@ require 'common'
 require "json"
 require 'active_support/time'
 
-TRAIN = ExternalServer.new("localhost", 4567)
+# GUTILS_NO_TRAIN=true makes every PRTrain call in this repo a no-op, without touching
+# the call sites. The unattended bug-run sets it: that run creates branches and PRs but
+# must never register them with the train, because train registration is what moves
+# Linear to a testing state — and it was doing that for commits it never pushed.
+class SuppressedTrain
+  def if_connectable
+    warning "GUTILS_NO_TRAIN=true — skipping PRTrain call"
+    nil
+  end
+
+  def is_connectable? = false
+end
+
+TRAIN =
+  if ENV["GUTILS_NO_TRAIN"] == "true"
+    SuppressedTrain.new
+  else
+    ExternalServer.new("localhost", 4567)
+  end
 
 def determine_dev_branch
   if Git.branch_exists "master"
