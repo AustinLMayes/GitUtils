@@ -165,12 +165,21 @@ namespace :stacking do
       warning "Found #{commits.length} stacked commits but no PRs for any of them"
       next
     end
+    bound = []
+    refused = []
     TRAIN.if_connectable do |conn|
       pr_numbers.each do |pr_number|
-        conn.send_request("command", {input: "bind_qa #{Git.repo_name_with_org} #{pr_number}"})
+        if conn.send_request("command", {input: "bind_qa #{Git.repo_name_with_org} #{pr_number}"})
+          bound << pr_number
+        else
+          refused << pr_number
+        end
       end
     end
-    info "Marked #{pr_numbers.length} stacked PR(s) QA-bound: ##{pr_numbers.join(', ')}"
+    # Per PR, because the train refuses bind_qa on a PR with no Linear issue linked and a stack
+    # binds some and not others. One summary counting every PR it TRIED claimed all of them.
+    info "Marked #{bound.length} stacked PR(s) QA-bound: ##{bound.join(', ')}" unless bound.empty?
+    warning "NOT QA-bound (#{refused.length}): ##{refused.join(', ')} — see the reasons above" unless refused.empty?
   end
 
   def create_stacked_prs(base, parent)
