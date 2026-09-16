@@ -269,12 +269,8 @@ namespace :br do
     if nums.empty?
       warning "No PRs found for any of the branches, skipping"
     else
-      TRAIN.if_connectable do |conn|
-        nums.each do |num|
-          conn.send_request("command", {input: "to_testing #{Git.repo_name_with_org} #{num}"})
-          info "Queued move of PR ##{num} to dev"
-        end
-      end
+      results = nums.map { |num| [num, train("pr", "to-testing", Git.repo_name_with_org, num)] }
+      report_train_results(results, "Queued for dev")
     end
   end
 
@@ -293,12 +289,8 @@ namespace :br do
     if nums.empty?
       warning "No PRs found for any of the branches, skipping"
     else
-      TRAIN.if_connectable do |conn|
-        nums.each do |num|
-          conn.send_request("command", {input: "resolve_conversations #{Git.repo_name_with_org} #{num}"})
-          info "Queued resolve of conversations on PR ##{num}"
-        end
-      end
+      results = nums.map { |num| [num, train("pr", "resolve", Git.repo_name_with_org, num)] }
+      report_train_results(results, "Resolved conversations on")
     end
   end
 end

@@ -6,21 +6,55 @@ require 'active_support/time'
 # the call sites. The unattended bug-run sets it: that run creates branches and PRs but
 # must never register them with the train, because train registration is what moves
 # Linear to a testing state — and it was doing that for commits it never pushed.
-class SuppressedTrain
-  def if_connectable
-    warning "GUTILS_NO_TRAIN=true — skipping PRTrain call"
-    nil
+TRAIN_ENABLED = ENV["GUTILS_NO_TRAIN"] != "true"
+
+# 🔴 `ax`, not a socket. These used to POST to localhost:4567 through `ExternalServer#send_request`,
+# which answers true/false — so a task could loop over ten PRs, have every one refused, and print
+# ten successes. `ax` reads the daemon's receipt and says what actually moved.
+#
+# Three outcomes, not two, because a caller in a loop needs to tell them apart:
+#   true   — it did something, and `out` says what
+#   false  — the train ACCEPTED the command and nothing changed, or refused it; this PR only
+#   :down  — the daemon is not running, so every remaining PR in this loop will fail the same way
+AX_TRAIN_DOWN = 3
+AX_TRAIN_NO_CHANGE = 4
+
+def train(*args)
+  argv = args.map(&:to_s)
+  unless TRAIN_ENABLED
+    warning "GUTILS_NO_TRAIN=true — skipping `ax #{argv.join(" ")}`"
+    return nil
   end
 
-  def is_connectable? = false
+  out = IO.popen(["ax", *argv], err: [:child, :out], &:read).to_s.strip
+  code = $?&.exitstatus
+  case code
+  when 0
+    info out unless out.empty?
+    true
+  when AX_TRAIN_NO_CHANGE
+    # Accepted, and nothing moved. That is an answer, not a problem — `info`, not `warning`, or
+    # every already-tracked PR in a stack reads as something going wrong.
+    info out unless out.empty?
+    false
+  when AX_TRAIN_DOWN
+    warning out
+    :down
+  else
+    warning out.empty? ? "`ax #{argv.join(" ")}` failed (exit #{code})" : out
+    false
+  end
 end
 
-TRAIN =
-  if ENV["GUTILS_NO_TRAIN"] == "true"
-    SuppressedTrain.new
-  else
-    ExternalServer.new("localhost", 4567)
-  end
+# The summary line every stack-wide task needs: say which PRs moved and which did not, instead of
+# counting the ones we tried.
+def report_train_results(results, noun)
+  moved = results.select { |_pr, ok| ok == true }.map(&:first)
+  refused = results.select { |_pr, ok| ok == false }.map(&:first)
+  info "#{noun}: ##{moved.join(', #')}" unless moved.empty?
+  warning "NOT #{noun} (#{refused.length}): ##{refused.join(', #')} — see the reasons above" unless refused.empty?
+  warning "PRTrain is not running — #{results.count { |_p, ok| ok == :down }} PR(s) were not sent" if results.any? { |_p, ok| ok == :down }
+end
 
 def determine_dev_branch
   if Git.branch_exists "master"

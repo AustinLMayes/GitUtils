@@ -49,11 +49,9 @@ namespace :ustacking do
         if pr_number.nil?
           warning "No stacked PR found for branch #{branch} and commit #{commit}, skipping"
         else
-          TRAIN.if_connectable do |conn|
-            conn.send_request("command", {input: "to_testing #{Git.repo_name_with_org} #{pr_number}"})
-            conn.send_request("command", {input: "unpause #{Git.repo_name_with_org} #{pr_number}"})
+          if train("pr", "to-testing", Git.repo_name_with_org, pr_number)
+            train("pr", "unpause", Git.repo_name_with_org, pr_number)
           end
-          info "Moved PR ##{pr_number} to dev"
         end
       end
     end
@@ -78,12 +76,8 @@ namespace :ustacking do
       if pr_numbers.empty?
         warning "No unique-stacked PRs found for branch #{branch}"
       else
-        TRAIN.if_connectable do |conn|
-          pr_numbers.each do |pr_number|
-            conn.send_request("command", {input: "resolve_conversations #{Git.repo_name_with_org} #{pr_number}"})
-          end
-        end
-        info "Queued resolve of conversations on PR ##{pr_numbers.join(", ")}"
+        results = pr_numbers.map { |n| [n, train("pr", "resolve", Git.repo_name_with_org, n)] }
+        report_train_results(results, "Resolved conversations on")
       end
     end
   end
@@ -109,12 +103,8 @@ namespace :ustacking do
       warning "Found #{commits.length} unique-stacked commits but no PRs for any of them"
       next
     end
-    TRAIN.if_connectable do |conn|
-      pr_numbers.each do |pr_number|
-        conn.send_request("command", {input: "assign #{Git.repo_name_with_org} #{pr_number} #{expanded.join(' ')}"})
-      end
-    end
-    info "Queued reviewer assignment for #{pr_numbers.length} unique-stacked PR(s): ##{pr_numbers.join(', ')} as #{expanded.inspect}"
+    results = pr_numbers.map { |n| [n, train("pr", "assign", Git.repo_name_with_org, n, *expanded)] }
+    report_train_results(results, "Assigned #{expanded.inspect} to")
   end
 
   desc "Mark every PR in the current unique stack as QA-bound so the train holds it until QA Passed"
@@ -130,21 +120,8 @@ namespace :ustacking do
       warning "Found #{commits.length} unique-stacked commits but no PRs for any of them"
       next
     end
-    bound = []
-    refused = []
-    TRAIN.if_connectable do |conn|
-      pr_numbers.each do |pr_number|
-        if conn.send_request("command", {input: "bind_qa #{Git.repo_name_with_org} #{pr_number}"})
-          bound << pr_number
-        else
-          refused << pr_number
-        end
-      end
-    end
-    # Per PR, because the train refuses bind_qa on a PR with no Linear issue linked and a stack
-    # binds some and not others. One summary counting every PR it TRIED claimed all of them.
-    info "Marked #{bound.length} unique-stacked PR(s) QA-bound: ##{bound.join(', ')}" unless bound.empty?
-    warning "NOT QA-bound (#{refused.length}): ##{refused.join(', ')} — see the reasons above" unless refused.empty?
+    results = pr_numbers.map { |n| [n, train("pr", "bind-qa", Git.repo_name_with_org, n)] }
+    report_train_results(results, "QA-bound")
   end
 
   def create_unique_stacked_prs(base, parent)
@@ -202,10 +179,9 @@ namespace :ustacking do
                     "--title", entry[:title], "--body", entry[:description], out: File::NULL, err: File::NULL)
         warning "Failed to sync PR ##{pr_number} title/description via gh pr edit"
       end
-      train = "#{parent}-#{entry[:branch].split('/').last}"
-      TRAIN.if_connectable do |conn|
-        conn.send_request("command", {input: "add #{train} #{Git.repo_name_with_org} #{pr_number}"})
-        conn.send_request("command", {input: "move #{train} #{Git.repo_name_with_org} #{pr_number} #{index}"})
+      train_id = "#{parent}-#{entry[:branch].split('/').last}"
+      if train("pr", "add", train_id, Git.repo_name_with_org, pr_number)
+        train("train", "move", train_id, Git.repo_name_with_org, pr_number, index)
       end
     end
   end

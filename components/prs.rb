@@ -14,9 +14,7 @@ namespace :prs do
             res = make_prs(Git.last_commit_message.values.join("\n"))
             if !res.nil?
                 info res
-                TRAIN.if_connectable do |conn|
-                    conn.send_request("command", {input: "add #{branch} #{Git.repo_name_with_org} #{res}"})
-                end
+                train("pr", "add", branch, Git.repo_name_with_org, res)
             end
         end
     end
@@ -29,9 +27,7 @@ namespace :prs do
             res = make_prs(title)
             if !res.nil?
                 info res
-                TRAIN.if_connectable do |conn|
-                    conn.send_request("command", {input: "add #{branch} #{Git.repo_name_with_org} #{res}"})
-                end
+                train("pr", "add", branch, Git.repo_name_with_org, res)
             end
         end
     end

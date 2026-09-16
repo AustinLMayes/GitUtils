@@ -87,12 +87,11 @@ namespace :stacking do
       if pr_numbers.empty?
         warning "No stacked PRs found for branch #{branch}"
       else
-        TRAIN.if_connectable do |conn|
-          pr_numbers.each do |pr_number|
-            conn.send_request("command", {input: "unpause #{Git.repo_name_with_org} #{pr_number}"})
-            conn.send_request("command", {input: "to_testing #{Git.repo_name_with_org} #{pr_number}"})
-          end
+        results = pr_numbers.map do |pr_number|
+          train("pr", "unpause", Git.repo_name_with_org, pr_number)
+          [pr_number, train("pr", "to-testing", Git.repo_name_with_org, pr_number)]
         end
+        report_train_results(results, "Queued for testing")
         info "Moved PR ##{pr_numbers.join(", ")} to testing"
       end
     end
@@ -113,12 +112,8 @@ namespace :stacking do
       if pr_numbers.empty?
         warning "No stacked PRs found for branch #{branch}"
       else
-        TRAIN.if_connectable do |conn|
-          pr_numbers.each do |pr_number|
-            conn.send_request("command", {input: "resolve_conversations #{Git.repo_name_with_org} #{pr_number}"})
-          end
-        end
-        info "Queued resolve of conversations on PR ##{pr_numbers.join(", ")}"
+        results = pr_numbers.map { |n| [n, train("pr", "resolve", Git.repo_name_with_org, n)] }
+        report_train_results(results, "Resolved conversations on")
       end
     end
   end
@@ -144,12 +139,8 @@ namespace :stacking do
       warning "Found #{commits.length} stacked commits but no PRs for any of them"
       next
     end
-    TRAIN.if_connectable do |conn|
-      pr_numbers.each do |pr_number|
-        conn.send_request("command", {input: "assign #{Git.repo_name_with_org} #{pr_number} #{expanded.join(' ')}"})
-      end
-    end
-    info "Queued reviewer assignment for #{pr_numbers.length} stacked PR(s): ##{pr_numbers.join(', ')} as #{expanded.inspect}"
+    results = pr_numbers.map { |n| [n, train("pr", "assign", Git.repo_name_with_org, n, *expanded)] }
+    report_train_results(results, "Assigned #{expanded.inspect} to")
   end
 
   desc "Mark every PR in the current stack as QA-bound so the train holds it until QA Passed"
@@ -165,21 +156,8 @@ namespace :stacking do
       warning "Found #{commits.length} stacked commits but no PRs for any of them"
       next
     end
-    bound = []
-    refused = []
-    TRAIN.if_connectable do |conn|
-      pr_numbers.each do |pr_number|
-        if conn.send_request("command", {input: "bind_qa #{Git.repo_name_with_org} #{pr_number}"})
-          bound << pr_number
-        else
-          refused << pr_number
-        end
-      end
-    end
-    # Per PR, because the train refuses bind_qa on a PR with no Linear issue linked and a stack
-    # binds some and not others. One summary counting every PR it TRIED claimed all of them.
-    info "Marked #{bound.length} stacked PR(s) QA-bound: ##{bound.join(', ')}" unless bound.empty?
-    warning "NOT QA-bound (#{refused.length}): ##{refused.join(', ')} — see the reasons above" unless refused.empty?
+    results = pr_numbers.map { |n| [n, train("pr", "bind-qa", Git.repo_name_with_org, n)] }
+    report_train_results(results, "QA-bound")
   end
 
   def create_stacked_prs(base, parent)
@@ -244,9 +222,10 @@ namespace :stacking do
                     "--title", entry[:title], "--body", entry[:description], out: File::NULL, err: File::NULL)
         warning "Failed to sync PR ##{pr_number} title/description via gh pr edit"
       end
-      TRAIN.if_connectable do |conn|
-        conn.send_request("command", {input: "add #{parent} #{Git.repo_name_with_org} #{pr_number}"})
-        conn.send_request("command", {input: "move #{parent} #{Git.repo_name_with_org} #{pr_number} #{index}"})
+      # Only position it if it actually went in — moving a PR that is not in the train is a
+      # refusal we would then report as a successful reorder.
+      if train("pr", "add", parent, Git.repo_name_with_org, pr_number)
+        train("train", "move", parent, Git.repo_name_with_org, pr_number, index)
       end
     end
   end
@@ -353,12 +332,8 @@ namespace :stacking do
     if also_remote
       pr_numbers = orphaned.filter_map { |branch| prs_by_branch[branch] }
       unless pr_numbers.empty?
-        TRAIN.if_connectable do |conn|
-          pr_numbers.each do |pr_number|
-            conn.send_request("command", {input: "remove #{Git.repo_name_with_org} #{pr_number}"})
-          end
-        end
-        info "Removed PR ##{pr_numbers.join(", ")} from the train"
+        results = pr_numbers.map { |n| [n, train("pr", "remove", Git.repo_name_with_org, n)] }
+        report_train_results(results, "Removed from the train")
       end
     end
     system "git", "checkout", (Git.branch_exists(current) ? current : base_stacking_branch)

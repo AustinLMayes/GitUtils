@@ -16,10 +16,7 @@ namespace :gprs do
         if pr_number.nil?
             error "No graphite-tracked PR found for #{branch} in .graphite_pr_info — submit the branch first via gprs:submit"
         end
-        TRAIN.if_connectable do |conn|
-            conn.send_request("command", {input: "assign #{Git.repo_name_with_org} #{pr_number} #{expanded.join(' ')}"})
-        end
-        info "Queued reviewer assignment for PR ##{pr_number} as #{expanded.inspect}"
+        train("pr", "assign", Git.repo_name_with_org, pr_number, *expanded)
     end
 
     desc "Mark the current branch's PR as QA-bound so the train holds it until QA Passed"
@@ -29,17 +26,10 @@ namespace :gprs do
         if pr_number.nil?
             error "No graphite-tracked PR found for #{branch} in .graphite_pr_info — submit the branch first via gprs:submit"
         end
-        bound = TRAIN.if_connectable do |conn|
-            conn.send_request("command", {input: "bind_qa #{Git.repo_name_with_org} #{pr_number}"})
-        end
-        # The train refuses bind_qa on a PR with no Linear issue linked, because a QA-bound PR that
-        # can never reach QA Passed parks until a human runs unbind_qa. Printing success over that
-        # is how two PRs sat bound with nothing linked for weeks.
-        if bound
-            info "Marked PR ##{pr_number} QA-bound"
-        else
-            warning "PR ##{pr_number} was NOT QA-bound — see the reason above"
-        end
+        # `ax` reports the outcome itself, including the refusal when nothing is linked — the case
+        # that left two PRs QA-bound with no issue for weeks. A second line here would either
+        # duplicate it or contradict it.
+        train("pr", "bind-qa", Git.repo_name_with_org, pr_number)
     end
 
     desc "Submit the current branch (or each branch in args) via Graphite"
@@ -49,9 +39,7 @@ namespace :gprs do
             res = make_prs_gt
             if !res.nil?
                 info res
-                TRAIN.if_connectable do |conn|
-                    conn.send_request("command", {input: "add #{branch} #{Git.repo_name_with_org} #{res}"})
-                end
+                train("pr", "add", branch, Git.repo_name_with_org, res)
             end
         end
     end
