@@ -12,7 +12,81 @@ def plan_stacked_entry(commit)
   end
   branch = "stacks/austin/#{first_token}"
   message = body.strip.empty? ? rest : "#{rest}\n\n#{body}"
-  { commit: commit, branch: branch, message: message, title: rest, description: body.strip }
+  { commit: commit, branch: branch, message: message, title: rest, description: body.strip,
+    subject: subject, label: first_token }
+end
+
+# Subjects that read like a repair of something rather than a change to something. Deliberately
+# broad; a match alone never warns — it has to also point at an ancestor in the same stack.
+DEFECT_SUBJECT_PATTERN = /\A(?:fix|hotfix|repair|correct|revert|undo|stop|prevent|resolve|patch|restore|unbreak|guard|no longer|don'?t)(?:s|es|ed)?\b/i
+
+def commit_file_list(commit)
+  `git diff-tree --no-commit-id --name-only -r #{commit}`.split("\n").map(&:strip).reject(&:empty?)
+end
+
+# `strings/legacy-codes` and `strings/generic-links` are the same subject area and the label's
+# first segment is the only thing that says so — #7292 repaired the commit below it while sharing
+# not one file with it, so file overlap on its own would have missed the case this check exists for.
+def label_namespace(label)
+  label.to_s.split("/").first.to_s
+end
+
+# These name the KIND of change, not the area it touches, so two of them in one stack say nothing
+# about whether either repairs the other. Measured over cubecraft production: 12 real `fix/*` runs,
+# 60 commit pairs, zero shared files — every one an independent pre-existing fix that belongs
+# stacked. Without this the check fires ~28 times on one 8-commit `fix/*` stack and gets ignored.
+GENERIC_LABEL_NAMESPACES = %w[fix fixes hotfix chore clean cleanup misc wip nit tmp revert].freeze
+
+def topical_namespace?(label)
+  ns = label_namespace(label)
+  !ns.empty? && !GENERIC_LABEL_NAMESPACES.include?(ns.downcase)
+end
+
+# P1 (cube-commit-testing): a fix for a defect introduced by commit N lands at or before N, amended
+# in — not stacked on top of it. #7292 is the case: its repair sat in review above the commit whose
+# breakage it fixed, and that breakage reached production alone.
+def downstream_fix_findings(plan)
+  files = plan.to_h { |entry| [entry[:commit], commit_file_list(entry[:commit])] }
+  plan.each_with_index.filter_map do |entry, index|
+    ancestors = plan[0...index]
+    next if ancestors.empty?
+    autosquash = entry[:label].to_s.match?(/\A(?:fixup|squash)!\z/i)
+    next unless autosquash || entry[:title].to_s.match?(DEFECT_SUBJECT_PATTERN)
+    targets = ancestors.filter_map do |ancestor|
+      reasons = []
+      shared = files[entry[:commit]] & files[ancestor[:commit]]
+      reasons << "shares #{shared.length} changed file(s): #{shared.first(3).join(", ")}" unless shared.empty?
+      if autosquash
+        named = entry[:title].to_s.start_with?(ancestor[:label].to_s) ||
+                entry[:title].to_s.strip == ancestor[:title].to_s.strip
+        reasons << "named by the autosquash subject" if named
+      elsif topical_namespace?(entry[:label]) && label_namespace(entry[:label]) == label_namespace(ancestor[:label])
+        reasons << "same label namespace `#{label_namespace(entry[:label])}/`"
+      end
+      reasons.empty? ? nil : { entry: ancestor, reasons: reasons }
+    end
+    next if targets.empty? && !autosquash
+    { entry: entry, targets: targets, autosquash: autosquash }
+  end
+end
+
+def report_stack_ordering(findings)
+  return if findings.empty?
+  warning "Stack ordering: #{findings.length} commit(s) look like a fix for something BELOW them in this stack."
+  findings.each do |finding|
+    entry = finding[:entry]
+    warning "  #{entry[:commit][0, 10]} #{entry[:subject]}"
+    if finding[:autosquash]
+      warning "    `#{entry[:label]}` is an autosquash marker — this run will push it as #{entry[:branch]} and open a PR for it"
+    end
+    finding[:targets].each do |target|
+      warning "    over #{target[:entry][:commit][0, 10]} #{target[:entry][:subject]}"
+      target[:reasons].each { |reason| warning "         #{reason}" }
+    end
+    next if finding[:targets].empty?
+    warning "    A fix for a defect introduced by commit N lands at or before N: `gamend #{finding[:targets].last[:entry][:commit][0, 10]}`,"
+    warning "    or slot it in BELOW that commit if it stands alone. Stacked above, it ships after the breakage does."
+  end
 end
 
 # Skip-condition for the cherry-pick + amend rebuild on subsequent runs.
@@ -170,6 +244,8 @@ namespace :stacking do
     end
 
     plan = commits.map { |commit| plan_stacked_entry(commit) }
+    ordering_findings = downstream_fix_findings(plan)
+    report_stack_ordering(ordering_findings)
 
     # gt's stack diff is computed against this base, so fetch it fresh.
     system "git", "fetch", "origin", base
@@ -227,6 +303,11 @@ namespace :stacking do
       if train("pr", "add", parent, Git.repo_name_with_org, pr_number)
         train("train", "move", parent, Git.repo_name_with_org, pr_number, index)
       end
+    end
+
+    # Re-stated here because the detail above is printed before `gt submit`, whose output buries it.
+    unless ordering_findings.empty?
+      warning "Stack ordering: #{ordering_findings.map { |f| f[:entry][:commit][0, 10] }.join(", ")} still sit above the commit(s) they look like a fix for — detail at the top of this run"
     end
   end
 
