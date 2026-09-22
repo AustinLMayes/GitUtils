@@ -20,7 +20,7 @@ namespace :r do
 
   desc "Run all matching workflows on the current branch"
   task :run_workflows do |task, args|
-    error "You must run this in the root of the repo" unless File.exists?(".github/workflows")
+    error "You must run this in the root of the repo" unless File.exist?(".github/workflows")
     branch = args.extras[0]
     branch = Git.current_branch if branch == "c"
     workflows = Dir.glob(".github/workflows/*.yml").map { |f| File.basename(f, ".yml") }
