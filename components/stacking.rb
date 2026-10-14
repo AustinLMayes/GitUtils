@@ -1,4 +1,4 @@
-# Source-commit -> { commit:, branch:, message: }. First whitespace-token of
+# Source-commit -> { commit:, branch:, title:, description: }. First whitespace-token of
 # the subject becomes the sub-branch suffix; the rest becomes the PR title.
 def plan_stacked_entry(commit)
   msg = Git.commit_message(commit)
@@ -11,9 +11,7 @@ def plan_stacked_entry(commit)
     error "Commit #{commit[0, 10]} has subject #{subject.inspect}; expected `<first-token> <rest>` (e.g. `ab/lol Some change`)"
   end
   branch = "stacks/austin/#{first_token}"
-  message = body.strip.empty? ? rest : "#{rest}\n\n#{body}"
-  { commit: commit, branch: branch, message: message, title: rest, description: body.strip,
-    subject: subject, label: first_token }
+  { commit: commit, branch: branch, title: rest, description: body.strip, subject: subject, label: first_token }
 end
 
 # Subjects that read like a repair of something rather than a change to something. Deliberately
@@ -89,17 +87,68 @@ def report_stack_ordering(findings)
   end
 end
 
-# Skip-condition for the cherry-pick + amend rebuild on subsequent runs.
-def stacked_branch_up_to_date?(branch, source_commit, expected_message, parent_branch)
-  return false unless Git.branch_exists(branch)
-  branch_tree = `git rev-parse #{branch}^{tree} 2>/dev/null`.strip
-  source_tree = `git rev-parse #{source_commit}^{tree} 2>/dev/null`.strip
-  return false if branch_tree.empty? || branch_tree != source_tree
-  parent_tip = `git rev-parse #{parent_branch} 2>/dev/null`.strip
-  branch_parent_tip = `git rev-parse #{branch}^ 2>/dev/null`.strip
-  return false if parent_tip.empty? || parent_tip != branch_parent_tip
-  branch_message = `git log -1 --pretty=%B #{branch}`.strip
-  branch_message == expected_message.strip
+def sync_stacked_pr(entry, base)
+  branch = entry[:branch]
+  pr_number = GitHub.open_pr_number(branch)
+  if pr_number.nil?
+    created = GitHub.make_pr(entry[:title], base: base, head: branch, body: entry[:description], draft: true)
+    return created.nil? ? nil : created.to_i
+  end
+  unless system("gh", "pr", "edit", pr_number.to_s, "--repo", Git.repo_name_with_org,
+                "--title", entry[:title], "--body", entry[:description], out: File::NULL, err: File::NULL)
+    warning "Failed to sync PR ##{pr_number} title/body via gh pr edit"
+  end
+  pr_number
+end
+
+# GitHub refuses a base change on a PR inside one of its stacks, and it moves the bases itself as
+# the stack merges. So only a real disagreement gets touched, and the stack is taken apart first.
+def reconcile_stacked_bases(expected_bases, states)
+  wrong = expected_bases.select { |n, base| states[n] && states[n]["baseRefName"] != base }
+  return if wrong.empty?
+  wrong.keys.filter_map { |n| states[n].dig("stack", "number") }.uniq.each do |stack|
+    info "Unstacking GitHub stack ##{stack} to retarget ##{wrong.keys.join(", #")}"
+    unless system("gh", "stack", "unstack", stack.to_s)
+      warning "gh stack unstack #{stack} failed"
+      next
+    end
+    states.each_value { |s| s["stack"] = nil if s.dig("stack", "number") == stack }
+  end
+  wrong.each do |n, base|
+    info "Retargeting ##{n} onto #{base}"
+    next if system("gh", "pr", "edit", n.to_s, "--repo", Git.repo_name_with_org, "--base", base, out: File::NULL, err: File::NULL)
+    warning "Failed to retarget PR ##{n} onto #{base}"
+  end
+end
+
+def already_in_base?(commit, base)
+  return true if system("git", "merge-base", "--is-ancestor", commit, "origin/#{base}")
+  `git cherry origin/#{base} #{commit} #{commit}^`.start_with?("-")
+end
+
+# GitHub rebases the rest of a stack itself when the bottom PR merges, and repoclean rebases the
+# source branch; both change the sha and neither changes the patch. Pushing on a sha mismatch alone
+# undid GitHub's rebase every run. Same patch on the same parent is the same branch; the parent
+# check is what catches a reorder, where every patch survives and the chain still changed.
+def matching_remote_sha(branch, commit, parent, base)
+  remote = GitHub.remote_sha(branch)
+  return nil if remote.nil?
+  return remote if remote == commit
+  return nil unless system("git", "fetch", "-q", "origin", branch, out: File::NULL, err: File::NULL)
+  remote_parent = `git rev-parse FETCH_HEAD^`.strip
+  chained = parent ? remote_parent == parent : system("git", "merge-base", "--is-ancestor", remote_parent, "origin/#{base}")
+  chained && patch_id("FETCH_HEAD") == patch_id(commit) ? remote : nil
+end
+
+def patch_id(rev)
+  `git diff-tree -p #{rev}^ #{rev} | git patch-id --stable`.split(" ").first
+end
+
+def remote_stacked_branches
+  `git ls-remote --heads origin 'refs/heads/stacks/austin/*'`.split("\n").filter_map do |line|
+    ref = line.split(/\s+/)[1].to_s
+    ref.sub("refs/heads/", "") unless ref.empty?
+  end
 end
 
 namespace :stacking do
@@ -124,19 +173,16 @@ namespace :stacking do
     current = Git.current_branch
     Git.ensure_clean
     branches = get_branches(args)
-    system "git checkout #{base_stacking_branch}"
-    system "git pull"
     branches.each do |branch|
       system "git", "checkout", branch
       Git.ensure_clean
-      create_stacked_prs(base_stacking_branch, branch)
-      system "git", "checkout", branch
       Git.push(force: true)
+      create_stacked_prs(base_stacking_branch, branch)
     end
     system "git checkout #{current}"
   end
 
-  desc "Request review for the first stacked PR"
+  desc "Cherry-pick every stacked commit onto the dev branch, push it, and move each PR to testing"
   task to_testing: :before do |task, args|
     branches = get_branches(args)
     branches.each do |branch|
@@ -247,57 +293,31 @@ namespace :stacking do
     ordering_findings = downstream_fix_findings(plan)
     report_stack_ordering(ordering_findings)
 
-    # gt's stack diff is computed against this base, so fetch it fresh.
-    system "git", "fetch", "origin", base
-
-    info "Materializing #{plan.length} stacked branch(es) and tracking them in Graphite"
+    system "git", "fetch", "-q", "origin", base
+    info "Pushing #{plan.length} stacked branch(es)"
     prev_branch = base
-    plan.each do |entry|
-      if stacked_branch_up_to_date?(entry[:branch], entry[:commit], entry[:message], prev_branch)
-        info "#{entry[:branch]} already matches source commit on top of #{prev_branch}; skipping rebuild"
-        system "git", "checkout", entry[:branch]
-      else
-        system "git", "branch", "-D", entry[:branch], out: File::NULL, err: File::NULL if Git.branch_exists(entry[:branch])
-        error "Failed to create #{entry[:branch]}" unless system("git", "checkout", "-b", entry[:branch], prev_branch)
-        unless system("git", "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", entry[:commit])
-          system "git", "cherry-pick", "--abort"
-          error "Cherry-pick failed for #{entry[:commit]} → #{entry[:branch]}"
-        end
-        error "Failed to amend commit message for #{entry[:branch]}" unless system("git", "commit", "--amend", "-m", entry[:message])
-      end
-      system("gt", "track", "--parent", prev_branch, "--no-interactive", out: File::NULL, err: File::NULL)
-      prev_branch = entry[:branch]
-    end
-
-    # --force overrides graphite's "remote SHA changed under you" guard —
-    # safe here because we own these sub-branches and the local rebuild is
-    # always the source of truth.
-    info "Submitting stack via Graphite"
-    begin
-      Graphite.submit(stack: true, force: true)
-    rescue Graphite::Error => e
-      system "git", "checkout", source_branch
-      error "gt submit --stack failed: #{e.message}"
-    end
-
-    system "git", "checkout", source_branch
-
-    pr_numbers_by_branch = Graphite.local_pr_numbers
+    prev_sha = nil
+    expected_bases = {}
     plan.each_with_index do |entry, index|
-      pr_number = pr_numbers_by_branch[entry[:branch]]
-      if pr_number.nil?
-        warning "No PR number found for #{entry[:branch]} in .graphite_pr_info — skipping train registration"
+      if already_in_base?(entry[:commit], base)
+        warning "#{entry[:commit][0, 10]} is already in #{base}; skipping #{entry[:branch]}"
         next
       end
-      # WORKAROUND: `gt submit` only sets the PR title/description on creation,
-      # so an edited commit subject/body (e.g. a reworded title or an added
-      # `Depends on …` trailer) never reaches an existing PR. Force both to
-      # match the source commit — title is the first-token-stripped subject,
-      # body is the commit body.
-      unless system("gh", "pr", "edit", pr_number.to_s, "--repo", Git.repo_name_with_org,
-                    "--title", entry[:title], "--body", entry[:description], out: File::NULL, err: File::NULL)
-        warning "Failed to sync PR ##{pr_number} title/description via gh pr edit"
+      remote = matching_remote_sha(entry[:branch], entry[:commit], prev_sha, base)
+      if remote
+        info "#{entry[:branch]} already carries #{entry[:commit][0, 10]}; skipping push"
+      else
+        error "Failed to push #{entry[:branch]}" unless GitHub.push_sha(entry[:commit], entry[:branch])
       end
+      pr_number = sync_stacked_pr(entry, prev_branch)
+      prev_sha = remote || entry[:commit]
+      if pr_number.nil?
+        warning "No PR for #{entry[:branch]} — skipping train registration"
+        prev_branch = entry[:branch]
+        next
+      end
+      expected_bases[pr_number] = prev_branch
+      prev_branch = entry[:branch]
       # Only position it if it actually went in — moving a PR that is not in the train is a
       # refusal we would then report as a successful reorder.
       if train("pr", "add", parent, Git.repo_name_with_org, pr_number)
@@ -305,10 +325,25 @@ namespace :stacking do
       end
     end
 
-    # Re-stated here because the detail above is printed before `gt submit`, whose output buries it.
+    unless expected_bases.empty?
+      states = GitHub.pull_request_states(Git.repo_name_with_org, expected_bases.keys)
+      reconcile_stacked_bases(expected_bases, states)
+      link_stack(base, expected_bases.keys, states) if expected_bases.length > 1
+    end
+
     unless ordering_findings.empty?
       warning "Stack ordering: #{ordering_findings.map { |f| f[:entry][:commit][0, 10] }.join(", ")} still sit above the commit(s) they look like a fix for — detail at the top of this run"
     end
+  end
+
+  # A merged PR still counts as a member, so growing an existing stack goes by its number — listing
+  # only the open PRs reads as "remove the merged one" and is refused.
+  def link_stack(base, pr_numbers, states)
+    stack = pr_numbers.filter_map { |n| states[n]&.dig("stack", "number") }.first
+    target = stack ? ["stack ##{stack}", [stack.to_s]] : ["a GitHub stack on #{base}", ["--base", base]]
+    info "Linking ##{pr_numbers.join(", #")} into #{target[0]}"
+    return if system("gh", "stack", "link", *target[1], *pr_numbers.map(&:to_s))
+    warning "gh stack link failed; the PRs are chained by base branch but carry no stack map"
   end
 
   def get_first_stacked_pr_number(base)
@@ -318,7 +353,7 @@ namespace :stacking do
   end
 
   def get_stacked_pr_number(commit)
-    Graphite.local_pr_numbers[plan_stacked_entry(commit)[:branch]]
+    GitHub.open_pr_number(plan_stacked_entry(commit)[:branch])
   end
 
   def get_first_commit(base)
@@ -341,7 +376,7 @@ namespace :stacking do
       error "Test failed for #{branch}" unless system "git", "rebase", "-x", cmd, base_stacking_branch
     end
   end
-  
+
   def stacking_source_branches
     Git.find_branches('^austin/[su]/.*$')
   end
@@ -357,66 +392,54 @@ namespace :stacking do
   end
 
   def expected_stacked_branches
-    current = Git.current_branch
-    expected = stacking_source_branches.each_with_object([]) do |branch, acc|
-      next unless Git.branch_exists(branch)
-      system "git", "checkout", branch
-      Git.ensure_clean
+    stacking_source_branches.each_with_object([]) do |branch, acc|
       commits = Git.my_commits_between(stacking_base_for(branch), branch, "austin")
       acc.concat(commits.filter_map { |commit| expected_stacked_branch(commit) })
     end.uniq
-    system "git", "checkout", current if Git.branch_exists(current)
-    expected
   end
 
   def orphaned_stacked_branches
-    Git.find_branches('^stacks/austin/.*$') - expected_stacked_branches
+    remote_stacked_branches - expected_stacked_branches
   end
 
-  desc "Report stacks/austin/* branches and PRs that no longer back a source commit"
+  desc "Report pushed stacks/austin/* branches that no longer back a source commit"
   task orphaned: :before do |task, args|
     expected = expected_stacked_branches
-    prs_by_branch = Graphite.local_pr_numbers
-    local = Git.find_branches('^stacks/austin/.*$')
-    orphaned_prs = prs_by_branch.keys - expected
-    orphaned_local = local - expected - orphaned_prs
-    found = prs_by_branch.keys & expected
-    orphaned_prs.each { |branch| warning "Orphaned PR ##{prs_by_branch[branch]} for branch #{branch}" }
-    orphaned_local.each { |branch| warning "Orphaned local stack branch #{branch} (no tracked PR)" }
-    found.each { |branch| info "PR ##{prs_by_branch[branch]} → #{branch}" }
-    info "No orphaned stack branches or PRs found" if orphaned_prs.empty? && orphaned_local.empty?
+    remote = remote_stacked_branches
+    (remote - expected).each do |branch|
+      pr = GitHub.open_pr_number(branch)
+      warning "Orphaned stack branch #{branch}#{pr ? " (PR ##{pr})" : " (no open PR)"}"
+    end
+    (remote & expected).each do |branch|
+      pr = GitHub.open_pr_number(branch)
+      info "#{pr ? "PR ##{pr}" : "no open PR"} → #{branch}"
+    end
+    info "No orphaned stack branches found" if (remote - expected).empty?
   end
 
-  desc "Delete local stacks/austin/* branches that no longer back a source commit. Pass `remote` to also delete the pushed branch (closing its PR) and drop it from the train."
+  desc "Delete pushed stacks/austin/* branches that no longer back a source commit (closing their PRs) and drop them from the train"
   task prune: :before do |task, args|
-    current = Git.current_branch
-    Git.ensure_clean
-    also_remote = args.extras.include?("remote")
     orphaned = orphaned_stacked_branches
     if orphaned.empty?
       info "No orphaned stack branches found"
       next
     end
-    prs_by_branch = Graphite.local_pr_numbers
+    prs_by_branch = orphaned.to_h { |branch| [branch, GitHub.open_pr_number(branch)] }
     warning "Found #{orphaned.length} orphaned stack branch(es):"
     orphaned.each do |branch|
       pr = prs_by_branch[branch]
       warning "  #{branch}#{pr ? " (PR ##{pr})" : ""}"
     end
-    info "Delete #{also_remote ? "these branches remotely (closing their PRs) and locally" : "these local branches (pass `remote` to also close PRs)"}? (y/n)"
+    info "Delete these branches on origin (closing their PRs)? (y/n)"
     unless STDIN.gets.to_s.strip.downcase.start_with?("y")
       info "Aborted; nothing deleted"
       next
     end
-    system "git", "checkout", base_stacking_branch
-    Git.delete_branches(*orphaned, remote: also_remote)
-    if also_remote
-      pr_numbers = orphaned.filter_map { |branch| prs_by_branch[branch] }
-      unless pr_numbers.empty?
-        results = pr_numbers.map { |n| [n, train("pr", "remove", Git.repo_name_with_org, n)] }
-        report_train_results(results, "Removed from the train")
-      end
+    orphaned.each { |branch| system "git", "push", "origin", "--delete", branch }
+    pr_numbers = prs_by_branch.values.compact
+    unless pr_numbers.empty?
+      results = pr_numbers.map { |n| [n, train("pr", "remove", Git.repo_name_with_org, n)] }
+      report_train_results(results, "Removed from the train")
     end
-    system "git", "checkout", (Git.branch_exists(current) ? current : base_stacking_branch)
   end
 end

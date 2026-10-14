@@ -134,50 +134,24 @@ namespace :ustacking do
     end
 
     plan = commits.map { |commit| plan_stacked_entry(commit) }
+    base_sha = `git rev-parse #{base}`.strip
 
-    system "git", "fetch", "origin", base
-
-    info "Materializing #{plan.length} unique branch(es), each parented on #{base}"
-    plan.each do |entry|
-      if stacked_branch_up_to_date?(entry[:branch], entry[:commit], entry[:message], base)
-        info "#{entry[:branch]} already matches source commit on top of #{base}; skipping rebuild"
-        system "git", "checkout", entry[:branch]
-      else
-        system "git", "branch", "-D", entry[:branch], out: File::NULL, err: File::NULL if Git.branch_exists(entry[:branch])
-        error "Failed to create #{entry[:branch]}" unless system("git", "checkout", "-b", entry[:branch], base)
-        unless system("git", "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", entry[:commit])
-          system "git", "cherry-pick", "--abort"
-          error "Cherry-pick failed for #{entry[:commit]} → #{entry[:branch]}"
-        end
-        error "Failed to amend commit message for #{entry[:branch]}" unless system("git", "commit", "--amend", "-m", entry[:message])
-      end
-      system("gt", "track", "--parent", base, "--no-interactive", out: File::NULL, err: File::NULL)
-
-      # Each ustacking sub-branch submits individually (no shared chain to
-      # bundle). --force overrides graphite's "remote SHA changed" guard.
-      begin
-        Graphite.submit(force: true)
-      rescue Graphite::Error => e
-        system "git", "checkout", source_branch
-        error "gt submit failed for #{entry[:branch]}: #{e.message}"
-      end
-    end
-
-    system "git", "checkout", source_branch
-
-    pr_numbers_by_branch = Graphite.local_pr_numbers
+    info "Pushing #{plan.length} unique branch(es), each parented on #{base}"
     plan.each_with_index do |entry, index|
-      pr_number = pr_numbers_by_branch[entry[:branch]]
-      if pr_number.nil?
-        warning "No PR number found for #{entry[:branch]} in .graphite_pr_info — skipping train registration"
+      sha = cherry_pick_onto_base(entry, base, source_branch)
+      if sha == base_sha
+        warning "#{entry[:commit][0, 10]} is already in #{base}; skipping #{entry[:branch]}"
         next
       end
-      # WORKAROUND: `gt submit` only sets the PR title/description on creation,
-      # so an edited commit subject/body never reaches an existing PR. Force
-      # both to match the source commit.
-      unless system("gh", "pr", "edit", pr_number.to_s, "--repo", Git.repo_name_with_org,
-                    "--title", entry[:title], "--body", entry[:description], out: File::NULL, err: File::NULL)
-        warning "Failed to sync PR ##{pr_number} title/description via gh pr edit"
+      if remote_matches_cherry_pick?(entry[:branch], sha)
+        info "#{entry[:branch]} already matches the cherry-pick; skipping push"
+      else
+        error "Failed to push #{entry[:branch]}" unless GitHub.push_sha(sha, entry[:branch])
+      end
+      pr_number = sync_stacked_pr(entry, base)
+      if pr_number.nil?
+        warning "No PR for #{entry[:branch]} — skipping train registration"
+        next
       end
       train_id = "#{parent}-#{entry[:branch].split('/').last}"
       if train("pr", "add", train_id, Git.repo_name_with_org, pr_number)
@@ -186,8 +160,27 @@ namespace :ustacking do
     end
   end
 
+  def cherry_pick_onto_base(entry, base, source_branch)
+    tmp = "tmp/ustack/#{entry[:label].tr('/', '_')}-#{Time.now.to_i}"
+    error "Failed to create #{tmp}" unless system("git", "checkout", "-q", "-b", tmp, base)
+    picked = system("git", "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", entry[:commit])
+    sha = `git rev-parse HEAD`.strip
+    system "git", "cherry-pick", "--abort", out: File::NULL, err: File::NULL unless picked
+    system "git", "checkout", "-q", source_branch
+    system "git", "branch", "-D", tmp, out: File::NULL
+    error "Cherry-pick failed for #{entry[:commit]} → #{entry[:branch]}" unless picked
+    sha
+  end
+
+  # A fresh cherry-pick never shares a sha with the pushed one, so compare what matters: same tree
+  # on the same parent. Anything else is a real change and gets pushed.
+  def remote_matches_cherry_pick?(branch, sha)
+    return false unless system("git", "fetch", "origin", branch, out: File::NULL, err: File::NULL)
+    `git rev-parse FETCH_HEAD^{tree} FETCH_HEAD^`.strip == `git rev-parse #{sha}^{tree} #{sha}^`.strip
+  end
+
   def get_pr_number(_base, commit)
-    Graphite.local_pr_numbers[plan_stacked_entry(commit)[:branch]]
+    GitHub.open_pr_number(plan_stacked_entry(commit)[:branch])
   end
 
   def get_first_commit(base)

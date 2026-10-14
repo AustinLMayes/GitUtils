@@ -63,7 +63,7 @@ namespace :br do
     # matches and no args at all falls back to the current branch, which may well
     # be production or master. Force pushing is only ever safe on my own
     # branches, so drop everything else and say what was dropped. The start
-    # anchor is also what keeps graphite's stacks/austin/* out.
+    # anchor is also what keeps the stacks/austin/* PR heads out.
     skipped = branches.reject { |branch| branch.start_with?("austin/") }
     warning "Refusing to force push #{skipped.join(", ")}" unless skipped.empty?
     push_all *(branches - skipped), force: true

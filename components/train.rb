@@ -14,7 +14,7 @@ namespace :train do
     # The translations train is automated end-to-end — bump its priority so it
     # outranks any concurrent feature trains in spread/expedite, and pre-stage
     # the `dev` team as the intended reviewer so the next request_review tick
-    # assigns + pings them via Graphite without manual intervention.
+    # assigns + pings them without manual intervention.
     if branch == "translations"
       train("train", "priority", branch, 50)
       train("pr", "assign", repo, num, "dev")
