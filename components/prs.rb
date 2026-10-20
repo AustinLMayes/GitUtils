@@ -37,7 +37,7 @@ namespace :prs do
         branches = get_non_stacked_branches(args)
         Git.act_on_branches *branches, ensure_exists: true do |branch|
             Git.push(force: true)
-            res = make_prs(Git.last_commit_message.values.join("\n"), draft: true)
+            res = make_prs(Git.last_commit_message.values.join("\n"))
             if !res.nil?
                 info res
                 train("pr", "add", branch, Git.repo_name_with_org, res)
@@ -72,7 +72,7 @@ namespace :prs do
         train("pr", "bind-qa", Git.repo_name_with_org, pr_number)
     end
 
-    def make_prs(message, draft: false)
+    def make_prs(message)
         lines = message.strip.split("\n")
         title = lines.first
         if title.empty?
@@ -88,7 +88,7 @@ namespace :prs do
             GitHub.change_pr_title(Git.current_branch, title)
             GitHub.change_pr_body(Git.current_branch, body)
         else
-            res = GitHub.make_pr(title, suffix: "", body: body, draft: draft)
+            res = GitHub.make_pr(title, suffix: "", body: body, draft: true)
         end
 
         system "git", "checkout", @current
