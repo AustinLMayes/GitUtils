@@ -130,14 +130,13 @@ end
 # source branch; both change the sha and neither changes the patch. Pushing on a sha mismatch alone
 # undid GitHub's rebase every run. Same patch on the same parent is the same branch; the parent
 # check is what catches a reorder, where every patch survives and the chain still changed.
-def matching_remote_sha(branch, commit, parent, base)
+def matching_remote_sha(branch, commit, parent)
   remote = GitHub.remote_sha(branch)
   return nil if remote.nil?
   return remote if remote == commit
   return nil unless system("git", "fetch", "-q", "origin", branch, out: File::NULL, err: File::NULL)
   remote_parent = `git rev-parse FETCH_HEAD^`.strip
-  chained = parent ? remote_parent == parent : system("git", "merge-base", "--is-ancestor", remote_parent, "origin/#{base}")
-  chained && patch_id("FETCH_HEAD") == patch_id(commit) ? remote : nil
+  remote_parent == (parent || `git rev-parse #{commit}^`.strip) && patch_id("FETCH_HEAD") == patch_id(commit) ? remote : nil
 end
 
 def patch_id(rev)
@@ -303,7 +302,7 @@ namespace :stacking do
         warning "#{entry[:commit][0, 10]} is already in #{base}; skipping #{entry[:branch]}"
         next
       end
-      remote = matching_remote_sha(entry[:branch], entry[:commit], prev_sha, base)
+      remote = matching_remote_sha(entry[:branch], entry[:commit], prev_sha)
       if remote
         info "#{entry[:branch]} already carries #{entry[:commit][0, 10]}; skipping push"
       else
