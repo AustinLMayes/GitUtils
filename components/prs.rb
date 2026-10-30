@@ -41,6 +41,7 @@ namespace :prs do
             if !res.nil?
                 info res
                 train("pr", "add", branch, Git.repo_name_with_org, res)
+                warn_unassigned([res], "prs:assign", branch)
             end
         end
     end

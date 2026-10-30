@@ -134,9 +134,11 @@ namespace :ustacking do
     end
 
     plan = commits.map { |commit| plan_stacked_entry(commit) }
+    validate_stack_plan(plan.reject { |entry| already_in_base?(entry[:commit], base) })
     base_sha = `git rev-parse #{base}`.strip
 
     info "Pushing #{plan.length} unique branch(es), each parented on #{base}"
+    pr_numbers = []
     plan.each_with_index do |entry, index|
       sha = cherry_pick_onto_base(entry, base, source_branch)
       if sha == base_sha
@@ -153,11 +155,13 @@ namespace :ustacking do
         warning "No PR for #{entry[:branch]} — skipping train registration"
         next
       end
+      pr_numbers << pr_number
       train_id = "#{parent}-#{entry[:branch].split('/').last}"
       if train("pr", "add", train_id, Git.repo_name_with_org, pr_number)
         train("train", "move", train_id, Git.repo_name_with_org, pr_number, index)
       end
     end
+    warn_unassigned(pr_numbers, "ustacking:assign", source_branch)
   end
 
   def cherry_pick_onto_base(entry, base, source_branch)

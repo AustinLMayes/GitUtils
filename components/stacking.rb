@@ -14,6 +14,32 @@ def plan_stacked_entry(commit)
   { commit: commit, branch: branch, title: rest, description: body.strip, subject: subject, label: first_token }
 end
 
+def stack_plan_problems(plan)
+  problems = plan.group_by { |entry| entry[:label] }.filter_map do |label, entries|
+    next if entries.length < 2
+    "#{entries.length} commits share the first token `#{label}` and would push over each other on #{entries.first[:branch]}: #{entries.map { |e| e[:commit][0, 10] }.join(", ")}"
+  end
+  plan.reject { |entry| entry[:label].include?("/") }.each do |entry|
+    problems << "#{entry[:commit][0, 10]} #{entry[:subject].inspect} doesn't start with a `<label>/` token"
+  end
+  sole = plan.filter_map do |entry|
+    ids = Linear.issue_ids(entry[:subject], entry[:description])
+    [ids.first, entry] if ids.length == 1
+  end
+  sole.group_by(&:first).each do |id, pairs|
+    next if pairs.length < 2
+    problems << "#{id} is the only Linear id on #{pairs.length} commits (#{pairs.map { |_, e| e[:commit][0, 10] }.join(", ")}), so the first merge closes it. Give each commit its own child issue"
+  end
+  problems
+end
+
+def validate_stack_plan(plan)
+  problems = stack_plan_problems(plan)
+  return if problems.empty?
+  problems.each { |problem| warning problem }
+  error "Not pushing this stack until the subjects are fixed (`git rebase -i`, reword)"
+end
+
 # Subjects that read like a repair of something rather than a change to something. Deliberately
 # broad; a match alone never warns — it has to also point at an ancestor in the same stack.
 DEFECT_SUBJECT_PATTERN = /\A(?:fix|hotfix|repair|correct|revert|undo|stop|prevent|resolve|patch|restore|unbreak|guard|no longer|don'?t)(?:s|es|ed)?\b/i
@@ -293,6 +319,7 @@ namespace :stacking do
     report_stack_ordering(ordering_findings)
 
     system "git", "fetch", "-q", "origin", base
+    validate_stack_plan(plan.reject { |entry| already_in_base?(entry[:commit], base) })
     info "Pushing #{plan.length} stacked branch(es)"
     prev_branch = base
     prev_sha = nil
@@ -329,6 +356,7 @@ namespace :stacking do
       reconcile_stacked_bases(expected_bases, states)
       link_stack(base, expected_bases.keys, states) if expected_bases.length > 1
     end
+    warn_unassigned(expected_bases.keys, "stacking:assign", source_branch)
 
     unless ordering_findings.empty?
       warning "Stack ordering: #{ordering_findings.map { |f| f[:entry][:commit][0, 10] }.join(", ")} still sit above the commit(s) they look like a fix for — detail at the top of this run"
@@ -399,6 +427,33 @@ namespace :stacking do
 
   def orphaned_stacked_branches
     remote_stacked_branches - expected_stacked_branches
+  end
+
+  def stack_source_target(arg)
+    arg.to_s.strip.sub(%r{\A(?:refs/(?:heads|remotes)/)?(?:origin/)?(?:stacks/austin/)?}, "")
+  end
+
+  def stack_sources(target)
+    stacking_source_branches.flat_map do |branch|
+      lines = IO.popen(["git", "log", "--no-merges", "--reverse", "--format=%H%x09%s", "#{stacking_base_for(branch)}..#{branch}"], &:read).split("\n")
+      lines.each_with_index.filter_map do |line, index|
+        sha, subject = line.split("\t", 2)
+        label, title = subject.to_s.split(/\s+/, 2)
+        next unless label == target || [subject, title].compact.any? { |text| text.casecmp?(target) }
+        { branch: branch, sha: sha, subject: subject, position: index + 1, of: lines.length }
+      end
+    end
+  end
+
+  desc "Find the austin/s or austin/u source commit behind a label, a stacks/austin branch or a PR title"
+  task source: :before do |task, args|
+    target = stack_source_target(args.extras.join(","))
+    error "Usage: stacking:source[<label|stacks/austin/<label>|PR title>]" if target.empty?
+    hits = stack_sources(target)
+    hits.each { |hit| info "#{hit[:branch]} #{hit[:sha][0, 10]} (#{hit[:position]} of #{hit[:of]}) #{hit[:subject]}" }
+    warning "#{hits.length} commits match #{target.inspect}; the label is meant to be unique" if hits.length > 1
+    next unless hits.empty?
+    error "No austin/s or austin/u commit matches #{target.inspect}. Already merged (`git log origin/production --oneline | grep`), on a plain austin/<topic> branch, or someone else's"
   end
 
   desc "Report pushed stacks/austin/* branches that no longer back a source commit"

@@ -56,6 +56,26 @@ def report_train_results(results, noun)
   warning "PRTrain is not running — #{results.count { |_p, ok| ok == :down }} PR(s) were not sent" if results.any? { |_p, ok| ok == :down }
 end
 
+def assign_in_this_run?
+  Rake.application.top_level_tasks.any? { |name| name.match?(/\A(?:u?stacking|prs):assign\b/) }
+end
+
+def train_reviewers(pr_number)
+  out = IO.popen(["ax", "pr", "show", Git.repo_name_with_org, pr_number.to_s], err: File::NULL, &:read)
+  return nil unless $?&.success?
+  Array(JSON.parse(out)["intendedReviewers"])
+rescue JSON::ParserError, SystemCallError
+  nil
+end
+
+# The train pauses a PR on `No reviewers assigned` and nothing un-pauses it, re-running the submit included.
+def warn_unassigned(pr_numbers, assign_task, branch)
+  return if !TRAIN_ENABLED || pr_numbers.empty? || assign_in_this_run?
+  bare = pr_numbers.select { |n| train_reviewers(n)&.empty? }
+  return if bare.empty?
+  warning "No reviewers on ##{bare.join(", #")}, so the train will pause it on `No reviewers assigned`. On #{branch}: fgutils '#{assign_task}[dev]'"
+end
+
 def determine_dev_branch
   if Git.branch_exists "master"
     "master"
