@@ -1,11 +1,10 @@
-require 'common'
 require 'active_support/time'
 
 namespace :br do
   desc "Pull all of the selected branches"
   task pull_all: :before do |task, args|
     Git.pull_branches *args.extras, ensure_exists: true
-    system "git", "checkout", @current
+    Git.stream nil, "checkout", @current
   end
 
   desc "Reset repos to the latest commit from remote"
@@ -13,9 +12,9 @@ namespace :br do
     dirs = FileUtils.parse_args(args, 0)
     dirs.each do |dir|
       Dir.chdir(dir) do
-        system "git", "fetch", "--all"
-        system "git", "add", "."
-        system "git", "reset", "--hard", "origin/#{Git.current_branch}"
+        Git.stream nil, "fetch", "--all"
+        Git.stream nil, "add", "."
+        Git.stream nil, "reset", "--hard", "origin/#{Git.current_branch}"
       end
     end
   end
@@ -29,7 +28,7 @@ namespace :br do
   desc "Run a command on the base branches"
   task act_on_base: :before do |task, args|
     command = args.extras[0]
-    act_on_all(command, *base_branches)
+    act_on_all(command, *Git.base_branches)
   end
 
   def act_on_all(command, *branches)
@@ -37,7 +36,7 @@ namespace :br do
       info "Executing #{command} on #{branch}"
       system command
     end
-    system "git", "checkout", @current
+    Git.stream nil, "checkout", @current
   end
 
   desc "Push all of the selected branches"
@@ -52,7 +51,7 @@ namespace :br do
     # never push production
     branches.delete("production")
     Git.push_branches *branches, ensure_exists: false, delay: delay, force: force
-    system "git", "checkout", @current
+    Git.stream nil, "checkout", @current
   end
 
   desc "Force push the selected austin/* branches"
@@ -71,21 +70,21 @@ namespace :br do
 
   desc "Pull all of the base branches"
   task pull_base: :before do |task, args|
-    system "git", "stash"
+    Git.stream nil, "stash"
     pull_base
-    system "git", "checkout", @current
-    system "git", "stash", "pop"
+    Git.stream nil, "checkout", @current
+    Git.stream nil, "stash", "pop"
   end
 
   def pull_base
-    Git.pull_branches *base_branches, ensure_exists: false
+    Git.pull_branches *Git.base_branches, ensure_exists: false
   end
 
   desc "Merge the current branch to master"
   task to_master: :before do |task, args|
     strategy = args.extras.length > 0 ? args.extras[0].to_sym : :merge
     if to_branch($dev_branch, strategy: strategy)
-      system "git", "checkout", @current
+      Git.stream nil, "checkout", @current
     else
       error "merge failed"
     end
@@ -94,7 +93,7 @@ namespace :br do
   desc "Merge the current branch to staging"
   task to_staging: :before do |task, args|
     if to_branch("staging")
-      system "git", "checkout", @current
+      Git.stream nil, "checkout", @current
     else
       error "merge failed"
     end
@@ -102,45 +101,45 @@ namespace :br do
 
   def to_branch(target, strategy: :merge)
     current = Git.current_branch
-    system "git", "checkout", target
+    Git.stream nil, "checkout", target
     Git.ensure_branch target
     case strategy
     when :merge
       info "Merging #{current} into #{target}"
-      return system "git", "merge", current, "--no-edit", "--rerere-autoupdate"
+      return Git.stream nil, "merge", current, "--no-edit", "--rerere-autoupdate"
     when :tmerge
       info "Merging #{current} into #{target} using theirs strategy"
-      return system "git", "merge", current, "--no-edit", "-X", "theirs", "--rerere-autoupdate"
+      return Git.stream nil, "merge", current, "--no-edit", "-X", "theirs", "--rerere-autoupdate"
     when :smerge
       info "Squash merging #{current} into #{target}"
-      res = system "git", "merge", "--squash", current
+      res = Git.stream nil, "merge", "--squash", current
       if res
-        system "git", "commit", "--no-edit", "-m", "Merge branch '#{current}' into #{target}"
+        Git.stream nil, "commit", "--no-edit", "-m", "Merge branch '#{current}' into #{target}"
         return true
       else
         return false
       end
     when :rebase
       info "Rebasing #{current} onto #{target}"
-      return system "git", "rebase", current
+      return Git.stream nil, "rebase", current
     when :cherry
       info "Cherry-picking #{current} onto #{target}"
-      commits = Git.commits_between(target, current).join(" ")
-      return system "git cherry-pick --allow-empty #{commits}"
+      commits = Git.commits_between(target, current)
+      return Git.stream nil, "cherry-pick", "--allow-empty", *commits
     else
       raise "Unknown strategy #{strategy}"
     end
   end
 
   def rebase_onto(base, from, to)
-    system "git", "checkout", base
-    system "git", "pull"
-    system "git", "checkout", @current
+    Git.stream nil, "checkout", base
+    Git.stream nil, "pull"
+    Git.stream nil, "checkout", @current
     if base.nil?
-      system "git", "rebase", from, to
+      Git.stream nil, "rebase", from, to
       return
     end
-    system "git", "rebase", "--onto", base, from, to
+    Git.stream nil, "rebase", "--onto", base, from, to
   end
 
   desc "Rebase the current branch onto the specified branch"
@@ -160,25 +159,25 @@ namespace :br do
 
   desc "Make a new branch based off of production"
   task new: :before do |task, args|
-    system "git", "stash"
+    Git.stream nil, "stash"
     make_branch args.extras[0], "production"
-    system "git", "stash", "pop"
+    Git.stream nil, "stash", "pop"
   end
 
   def make_branch(name, base)
-    system "git", "checkout", base
+    Git.stream nil, "checkout", base
     Git.ensure_branch base
     name = "austin/" + name
     info "Creating #{name} based off of #{base}"
-    system "git", "go", name
+    Git.stream nil, "go", name
   end
 
   desc "Make a branch and cherry-pick the specified commits"
   task new_cherry: :before do |task, args|
-    system "git", "stash"
+    Git.stream nil, "stash"
     make_branch args.extras[0], "production"
-    system "git", "cherry-pick", *args.extras.drop(1)
-    system "git", "stash", "pop"
+    Git.stream nil, "cherry-pick", *args.extras.drop(1)
+    Git.stream nil, "stash", "pop"
   end
 
   desc "Rebase the current branch onto production"
@@ -192,19 +191,19 @@ namespace :br do
       branches = Git.find_branches_multi(args.extras)
     end
     branches.delete("austin/stage")
-    system "git", "stash"
+    Git.stream nil, "stash"
     pull_base unless dont_pull
     branches.each do |branch|
-      system "git", "checkout", "production"
+      Git.stream nil, "checkout", "production"
       if to_branch(branch, strategy: :rebase)
-        system "git", "checkout", branch
+        Git.stream nil, "checkout", branch
       else
         error "rebase failed"
       end
     end
-    system "git", "checkout", @current
+    Git.stream nil, "checkout", @current
     push_all *branches, $dev_branch, force: true
-    system "git", "stash", "pop"
+    Git.stream nil, "stash", "pop"
   end
 
   desc "Merge production into the current branch"
@@ -219,39 +218,39 @@ namespace :br do
     end
     pull_base unless dont_pull
     branches.each do |branch|
-      system "git", "stash"
-      system "git", "checkout", "production"
+      Git.stream nil, "stash"
+      Git.stream nil, "checkout", "production"
       if to_branch(branch)
-        system "git", "checkout", branch
+        Git.stream nil, "checkout", branch
       else
         error "merge failed"
       end
-      system "git", "stash", "pop"
+      Git.stream nil, "stash", "pop"
     end
     push_all *branches, $dev_branch
   end
 
   desc "Delete and re-pull the master branch"
   task reset_master: :before do |task, args|
-    system "git", "stash"
-    system "git", "checkout", "production"
-    system "git", "branch", "-D", $dev_branch
-    system "git", "fetch", "origin", $dev_branch + ":" + $dev_branch
-    system "git", "checkout", @current
-    system "git", "stash", "pop"
+    Git.stream nil, "stash"
+    Git.stream nil, "checkout", "production"
+    Git.stream nil, "branch", "-D", $dev_branch
+    Git.stream nil, "fetch", "origin", $dev_branch + ":" + $dev_branch
+    Git.stream nil, "checkout", @current
+    Git.stream nil, "stash", "pop"
   end
 
   desc "Merge production into main branch"
   task sync_master: :before do |task, args|
-    system "git", "stash"
-    system "git", "checkout", "production"
-    system "git", "pull"
-    system "git", "checkout", $dev_branch
-    system "git", "pull"
-    system "git", "merge", "--no-edit", "production"
+    Git.stream nil, "stash"
+    Git.stream nil, "checkout", "production"
+    Git.stream nil, "pull"
+    Git.stream nil, "checkout", $dev_branch
+    Git.stream nil, "pull"
+    Git.stream nil, "merge", "--no-edit", "production"
     Git.push
-    system "git", "checkout", @current
-    system "git", "stash", "pop"
+    Git.stream nil, "checkout", @current
+    Git.stream nil, "stash", "pop"
   end
 
   desc "Request review for the PR"

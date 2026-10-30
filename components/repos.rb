@@ -3,9 +3,9 @@ namespace :r do
   task :pull do |task, args|
     FileUtils.act_on_dirs(FileUtils.parse_args(args, 0)) do |dir|
       info "Pulling #{dir}"
-      system "git", "stash"
-      system "git", "pull"
-      system "git", "stash", "pop"
+      Git.stream nil, "stash"
+      Git.stream nil, "pull"
+      Git.stream nil, "stash", "pop"
     end
   end
 
@@ -13,8 +13,8 @@ namespace :r do
   task :pull_dirs do |task, args|
     FileUtils.act_on_dirs(FileUtils.parse_args(args, 0)) do |dir|
       info "Pulling #{dir}"
-      Git.safe_checkout *root_branches
-      system "git", "pull"
+      Git.safe_checkout *Git.root_branches
+      Git.stream nil, "pull"
     end
   end
 
@@ -27,7 +27,7 @@ namespace :r do
     workflows += Dir.glob(".github/workflows/*.yaml").map { |f| File.basename(f, ".yaml") }
     error "No workflows found" if workflows.empty?
     flags = ""
-    if `git remote -v`.include?("rocket-data-platform")
+    if Git.capture("remote", "-v").include?("rocket-data-platform")
       flags += "-f environment=man1-#{branch == "production" ? "prod" : "dev"}1"
     end
     args.extras.drop(1).each do |query|
@@ -82,7 +82,7 @@ namespace :r do
     return @all_remote_branches if defined?(@all_remote_branches)
     repo = Git.repo_name_with_org
     info "Fetching branch list from #{repo}"
-    res = `gh api --paginate "/repos/#{repo}/branches?per_page=100" --jq '.[].name'`
+    res = GitHub.gh("api", "--paginate", "/repos/#{repo}/branches?per_page=100", "--jq", ".[].name").out
     @all_remote_branches = res.split("\n").map(&:strip).reject(&:empty?)
   end
 
@@ -102,7 +102,7 @@ namespace :r do
     repo = Git.repo_name_with_org
     runs = []
     %w(in_progress queued requested waiting pending).each do |status|
-      res = `gh api 'repos/#{repo}/actions/runs?branch=#{branch}&status=#{status}&per_page=200' --jq '[.workflow_runs[] | {databaseId: .id, workflowName: .name, status: .status}]'`
+      res = GitHub.gh("api", "repos/#{repo}/actions/runs?branch=#{branch}&status=#{status}&per_page=200", "--jq", "[.workflow_runs[] | {databaseId: .id, workflowName: .name, status: .status}]").out
       parsed = JSON.parse(res) rescue []
       runs += parsed
     end
@@ -119,9 +119,9 @@ namespace :r do
       id = run["databaseId"].to_s
       info "Canceling run #{id} (#{run["workflowName"]}, #{run["status"]}) on #{branch}"
       if %w(queued requested waiting pending).include?(run["status"])
-        system "gh", "api", "-X", "POST", "/repos/#{repo}/actions/runs/#{id}/force-cancel"
+        GitHub.stream "api", "-X", "POST", "/repos/#{repo}/actions/runs/#{id}/force-cancel"
       else
-        system "gh", "run", "cancel", id
+        GitHub.stream "run", "cancel", id
       end
     end
   end

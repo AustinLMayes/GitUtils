@@ -99,8 +99,9 @@ namespace :actions do
         approved = []
         refused = []
         runs.each do |run|
-            out = IO.popen(["gh", "api", "-X", "POST", "repos/#{repo}/actions/runs/#{run["id"]}/approve"], err: [:child, :out], &:read).to_s.strip
-            if $?&.success?
+            result = GitHub.gh("api", "-X", "POST", "repos/#{repo}/actions/runs/#{run["id"]}/approve", stderr: :merge, fail_open: false)
+            out = result.out.strip
+            if result.ok?
                 approved << run
                 info "Approved #{run["id"]} — #{run["name"]}"
             else
@@ -125,7 +126,7 @@ namespace :actions do
         else
             failed.each do |run|
                 # --failed, always: a whole-run rerun burns the jobs that already passed.
-                if system("gh", "run", "rerun", run["id"].to_s, "--failed", "--repo", repo)
+                if GitHub.stream("run", "rerun", run["id"].to_s, "--failed", "--repo", repo)
                     info "Re-ran the failed jobs of #{run["id"]} — #{run["name"]}"
                 else
                     warning "Could not re-run #{run["id"]} — #{run["name"]}"
@@ -168,8 +169,9 @@ namespace :actions do
     end
 
     def actions_gh_json(path, soft: false)
-        out = IO.popen(["gh", "api", path], err: [:child, :out], &:read).to_s
-        unless $?&.success?
+        result = GitHub.gh("api", path, stderr: :merge, fail_open: false)
+        out = result.out
+        unless result.ok?
             return nil if soft
             error "gh api #{path} failed: #{out.strip}"
         end

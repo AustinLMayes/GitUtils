@@ -10,7 +10,7 @@ namespace :linear do
       message = message_full.values.join(" ")
       if message.start_with?("Merge pull request")
         pr_number = message.split(" ")[3].gsub("#", "")
-        message = `gh api repos/#{Git.repo_name_with_org}/pulls/#{pr_number} --jq '.title + \"\\n\" + .body'`.strip
+        message = GitHub.gh("api", "repos/#{Git.repo_name_with_org}/pulls/#{pr_number}", "--jq", '.title + "\n" + .body').out.strip
       end
       ids = extract_issue_ids(message)
       transitioned = []
@@ -95,14 +95,14 @@ namespace :linear do
     desc "Transition the issues on production to Done"
     task transition_prod: :before do |task, args|
       current = Git.current_branch
-      system "git stash"
-      system "git checkout production"
+      Git.stream nil, "stash"
+      Git.stream nil, "checkout", "production"
       Git.ensure_branch "production"
       commits = Git.last_n_commits(30)
       commits.each do |commit|
         transition_issues(commit, done: true, ensure_mine: true)
       end
-      system "git checkout #{current}"
-      system "git stash pop"
+      Git.stream nil, "checkout", current
+      Git.stream nil, "stash", "pop"
     end
 end

@@ -70,7 +70,7 @@ class StackingTest < Minitest::Test
   def test_stack_sources_finds_the_source_commit_from_any_end
     Dir.mktmpdir do |dir|
       Dir.chdir(dir) do
-        git = ->(*args) { system("git", *args, out: File::NULL, err: File::NULL) or raise "git #{args.join(" ")}" }
+        git = ->(*args) { Git.ok?(nil, *args) or raise "git #{args.join(" ")}" }
         git.("init", "-q", "-b", "production")
         git.("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
         git.("checkout", "-q", "-b", "austin/s/whitelist")
@@ -83,7 +83,7 @@ class StackingTest < Minitest::Test
         hits = nil
         capture_io { hits = stack_sources("wl/2fa") }
         assert_equal [["austin/s/whitelist", 2, 2]], hits.map { |h| [h[:branch], h[:position], h[:of]] }
-        assert_equal `git rev-parse austin/s/whitelist`.strip, hits.first[:sha]
+        assert_equal Git.out(nil, "rev-parse", "austin/s/whitelist"), hits.first[:sha]
 
         capture_io { hits = stack_sources(stack_source_target("origin/stacks/austin/fix/chat")) }
         assert_equal ["austin/u/bugs"], hits.map { |h| h[:branch] }

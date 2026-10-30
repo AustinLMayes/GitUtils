@@ -1,4 +1,3 @@
-require 'common'
 require 'active_support/time'
 
 namespace :spread do
@@ -19,7 +18,7 @@ namespace :spread do
     task :fix_dates do |task, args|
         commits = args.extras[0].to_i
         info "Fixing dates for #{commits} commits"
-        system "FILTER_BRANCH_SQUELCH_WARNING=1" "git", "filter-branch", "-f", "--env-filter", "GIT_COMMITTER_DATE=$GIT_AUTHOR_DATE", "HEAD~#{commits}..HEAD"
+        Git.stream nil, "filter-branch", "-f", "--env-filter", "GIT_COMMITTER_DATE=$GIT_AUTHOR_DATE", "HEAD~#{commits}..HEAD", env: { "FILTER_BRANCH_SQUELCH_WARNING" => "1" }
     end
 
     def gather_commits(dirs, beg=nil)
@@ -187,7 +186,7 @@ namespace :spread do
                 joined = conditions.join("")
                 back = conditions.count
                 # Also re-sign commits
-                system "FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --env-filter '#{joined}' --commit-filter 'git commit-tree -S \"$@\";' HEAD~#{back}..HEAD"
+                Git.stream nil, "filter-branch", "-f", "--env-filter", joined, "--commit-filter", 'git commit-tree -S "$@";', "HEAD~#{back}..HEAD", env: { "FILTER_BRANCH_SQUELCH_WARNING" => "1" }
             end
             info "Spread out commits for #{dir}"
         end
@@ -200,19 +199,19 @@ namespace :spread do
         if Git.branch_exists "austin/stage"
             error "Branch austin/stage already exists!"
         end
-        system "git", "stash"
-        system "git", "checkout", "production"
+        Git.stream nil, "stash"
+        Git.stream nil, "checkout", "production"
         pull_base
         @current = "production"
         make_branch "stage", "production"
         @current = Git.current_branch
         # Loop back through history and stop when we hit the specified time
         start_commit = nil
-        `git log --format=%H`.split("\n").each do |commit|
+        Git.capture("log", "--format=%H").split("\n").each do |commit|
             start_commit = commit
-            is_merge = `git log --format=%P -n 1 #{commit}`.strip.split(" ").length > 1
+            is_merge = Git.capture("log", "--format=%P", "-n", "1", commit).strip.split(" ").length > 1
             next unless is_merge
-            commit_time_raw = `git log --format=%ct -n 1 #{commit}`.strip
+            commit_time_raw = Git.capture("log", "--format=%ct", "-n", "1", commit).strip
             commit_time = Time.at(commit_time_raw.to_i)
             if commit_time < time
                 info "#{commit} is before #{time} (#{commit_time_raw})"
@@ -221,6 +220,6 @@ namespace :spread do
                 info "#{commit} is after #{time}"
             end
         end
-        system "git", "reset", "--hard", start_commit
+        Git.stream nil, "reset", "--hard", start_commit
     end
 end

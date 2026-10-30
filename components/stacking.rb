@@ -45,7 +45,7 @@ end
 DEFECT_SUBJECT_PATTERN = /\A(?:fix|hotfix|repair|correct|revert|undo|stop|prevent|resolve|patch|restore|unbreak|guard|no longer|don'?t)(?:s|es|ed)?\b/i
 
 def commit_file_list(commit)
-  `git diff-tree --no-commit-id --name-only -r #{commit}`.split("\n").map(&:strip).reject(&:empty?)
+  Git.capture("diff-tree", "--no-commit-id", "--name-only", "-r", commit).split("\n").map(&:strip).reject(&:empty?)
 end
 
 # `strings/legacy-codes` and `strings/generic-links` are the same subject area and the label's
@@ -120,8 +120,8 @@ def sync_stacked_pr(entry, base)
     created = GitHub.make_pr(entry[:title], base: base, head: branch, body: entry[:description], draft: true)
     return created.nil? ? nil : created.to_i
   end
-  unless system("gh", "pr", "edit", pr_number.to_s, "--repo", Git.repo_name_with_org,
-                "--title", entry[:title], "--body", entry[:description], out: File::NULL, err: File::NULL)
+  unless GitHub.gh("pr", "edit", pr_number.to_s, "--repo", Git.repo_name_with_org,
+                   "--title", entry[:title], "--body", entry[:description], stderr: :discard).ok?
     warning "Failed to sync PR ##{pr_number} title/body via gh pr edit"
   end
   pr_number
@@ -134,7 +134,7 @@ def reconcile_stacked_bases(expected_bases, states)
   return if wrong.empty?
   wrong.keys.filter_map { |n| states[n].dig("stack", "number") }.uniq.each do |stack|
     info "Unstacking GitHub stack ##{stack} to retarget ##{wrong.keys.join(", #")}"
-    unless system("gh", "stack", "unstack", stack.to_s)
+    unless GitHub.stream("stack", "unstack", stack.to_s)
       warning "gh stack unstack #{stack} failed"
       next
     end
@@ -142,14 +142,14 @@ def reconcile_stacked_bases(expected_bases, states)
   end
   wrong.each do |n, base|
     info "Retargeting ##{n} onto #{base}"
-    next if system("gh", "pr", "edit", n.to_s, "--repo", Git.repo_name_with_org, "--base", base, out: File::NULL, err: File::NULL)
+    next if GitHub.gh("pr", "edit", n.to_s, "--repo", Git.repo_name_with_org, "--base", base, stderr: :discard).ok?
     warning "Failed to retarget PR ##{n} onto #{base}"
   end
 end
 
 def already_in_base?(commit, base)
-  return true if system("git", "merge-base", "--is-ancestor", commit, "origin/#{base}")
-  `git cherry origin/#{base} #{commit} #{commit}^`.start_with?("-")
+  return true if Git.stream(nil, "merge-base", "--is-ancestor", commit, "origin/#{base}")
+  Git.capture("cherry", "origin/#{base}", commit, "#{commit}^").start_with?("-")
 end
 
 # GitHub rebases the rest of a stack itself when the bottom PR merges, and repoclean rebases the
@@ -160,17 +160,18 @@ def matching_remote_sha(branch, commit, parent)
   remote = GitHub.remote_sha(branch)
   return nil if remote.nil?
   return remote if remote == commit
-  return nil unless system("git", "fetch", "-q", "origin", branch, out: File::NULL, err: File::NULL)
-  remote_parent = `git rev-parse FETCH_HEAD^`.strip
-  remote_parent == (parent || `git rev-parse #{commit}^`.strip) && patch_id("FETCH_HEAD") == patch_id(commit) ? remote : nil
+  return nil unless Git.ok?(nil, "fetch", "-q", "origin", branch, stderr: :discard)
+  remote_parent = Git.capture("rev-parse", "FETCH_HEAD^").strip
+  remote_parent == (parent || Git.capture("rev-parse", "#{commit}^").strip) && patch_id("FETCH_HEAD") == patch_id(commit) ? remote : nil
 end
 
 def patch_id(rev)
-  `git diff-tree -p #{rev}^ #{rev} | git patch-id --stable`.split(" ").first
+  diff = Git.capture("diff-tree", "-p", "#{rev}^", rev)
+  Git.run(nil, "patch-id", "--stable", stdin: diff, stderr: :inherit).out.split(" ").first
 end
 
 def remote_stacked_branches
-  `git ls-remote --heads origin 'refs/heads/stacks/austin/*'`.split("\n").filter_map do |line|
+  Git.capture("ls-remote", "--heads", "origin", "refs/heads/stacks/austin/*").split("\n").filter_map do |line|
     ref = line.split(/\s+/)[1].to_s
     ref.sub("refs/heads/", "") unless ref.empty?
   end
@@ -199,30 +200,30 @@ namespace :stacking do
     Git.ensure_clean
     branches = get_branches(args)
     branches.each do |branch|
-      system "git", "checkout", branch
+      Git.stream nil, "checkout", branch
       Git.ensure_clean
       Git.push(force: true)
       create_stacked_prs(base_stacking_branch, branch)
     end
-    system "git checkout #{current}"
+    Git.stream nil, "checkout", current
   end
 
   desc "Cherry-pick every stacked commit onto the dev branch, push it, and move each PR to testing"
   task to_testing: :before do |task, args|
     branches = get_branches(args)
     branches.each do |branch|
-      system "git", "checkout", branch
+      Git.stream nil, "checkout", branch
       commits = Git.my_commits_between(base_stacking_branch, branch, "austin")
       next if commits.empty?
-      system "git", "checkout", $dev_branch
+      Git.stream nil, "checkout", $dev_branch
       Git.ensure_clean
-      unless system "git", "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", *commits
-        system "git", "cherry-pick", "--abort"
-        system "git", "checkout", branch
+      unless Git.stream nil, "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", *commits
+        Git.stream nil, "cherry-pick", "--abort"
+        Git.stream nil, "checkout", branch
         error "Cherry-pick failed"
       end
       Git.push
-      system "git", "checkout", branch
+      Git.stream nil, "checkout", branch
       Git.ensure_clean
       pr_numbers = []
       commits.each do |commit|
@@ -246,7 +247,7 @@ namespace :stacking do
   task resolve: :before do |task, args|
     branches = get_branches(args)
     branches.each do |branch|
-      system "git", "checkout", branch
+      Git.stream nil, "checkout", branch
       commits = Git.my_commits_between(base_stacking_branch, branch, "austin")
       next if commits.empty?
       pr_numbers = []
@@ -318,7 +319,7 @@ namespace :stacking do
     ordering_findings = downstream_fix_findings(plan)
     report_stack_ordering(ordering_findings)
 
-    system "git", "fetch", "-q", "origin", base
+    Git.stream nil, "fetch", "-q", "origin", base
     validate_stack_plan(plan.reject { |entry| already_in_base?(entry[:commit], base) })
     info "Pushing #{plan.length} stacked branch(es)"
     prev_branch = base
@@ -369,7 +370,7 @@ namespace :stacking do
     stack = pr_numbers.filter_map { |n| states[n]&.dig("stack", "number") }.first
     target = stack ? ["stack ##{stack}", [stack.to_s]] : ["a GitHub stack on #{base}", ["--base", base]]
     info "Linking ##{pr_numbers.join(", #")} into #{target[0]}"
-    return if system("gh", "stack", "link", *target[1], *pr_numbers.map(&:to_s))
+    return if GitHub.stream("stack", "link", *target[1], *pr_numbers.map(&:to_s))
     warning "gh stack link failed; the PRs are chained by base branch but carry no stack map"
   end
 
@@ -393,14 +394,14 @@ namespace :stacking do
     branches = get_branches(args)
     branches.each do |branch|
       Git.ensure_clean
-      system "git", "checkout", branch
+      Git.stream nil, "checkout", branch
       Git.ensure_clean
       cmd = "./gradlew classes"
       # check for microservices directory
       if Dir.exist?("microservices")
         cmd = "./gradlew -p microservices classes && ./gradlew :data-interface:classes"
       end
-      error "Test failed for #{branch}" unless system "git", "rebase", "-x", cmd, base_stacking_branch
+      error "Test failed for #{branch}" unless Git.stream nil, "rebase", "-x", cmd, base_stacking_branch
     end
   end
 
@@ -435,7 +436,7 @@ namespace :stacking do
 
   def stack_sources(target)
     stacking_source_branches.flat_map do |branch|
-      lines = IO.popen(["git", "log", "--no-merges", "--reverse", "--format=%H%x09%s", "#{stacking_base_for(branch)}..#{branch}"], &:read).split("\n")
+      lines = Git.capture("log", "--no-merges", "--reverse", "--format=%H%x09%s", "#{stacking_base_for(branch)}..#{branch}").split("\n")
       lines.each_with_index.filter_map do |line, index|
         sha, subject = line.split("\t", 2)
         label, title = subject.to_s.split(/\s+/, 2)
@@ -489,7 +490,7 @@ namespace :stacking do
       info "Aborted; nothing deleted"
       next
     end
-    orphaned.each { |branch| system "git", "push", "origin", "--delete", branch }
+    orphaned.each { |branch| Git.stream nil, "push", "origin", "--delete", branch }
     pr_numbers = prs_by_branch.values.compact
     unless pr_numbers.empty?
       results = pr_numbers.map { |n| [n, train("pr", "remove", Git.repo_name_with_org, n)] }

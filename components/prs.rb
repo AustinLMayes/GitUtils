@@ -92,7 +92,7 @@ namespace :prs do
             res = GitHub.make_pr(title, suffix: "", body: body, draft: true)
         end
 
-        system "git", "checkout", @current
+        Git.stream nil, "checkout", @current
         return res
     end
 end

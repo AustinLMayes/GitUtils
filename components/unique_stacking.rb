@@ -16,11 +16,11 @@ namespace :ustacking do
     Git.ensure_clean
     branches = get_unique_branches(args)
     branches.each do |branch|
-      system "git", "checkout", branch
+      Git.stream nil, "checkout", branch
       Git.ensure_clean
       Git.push(force: true)
       create_unique_stacked_prs("production", branch)
-      system "git", "checkout", branch
+      Git.stream nil, "checkout", branch
     end
   end
 
@@ -28,21 +28,21 @@ namespace :ustacking do
   task to_testing: :before do |task, args|
     branches = get_unique_branches(args)
     branches.each do |branch|
-      system "git", "checkout", branch
+      Git.stream nil, "checkout", branch
       commits = Git.my_commits_between("production", Git.current_branch, "austin")
       next if commits.empty?
-      system "git", "checkout", $dev_branch
+      Git.stream nil, "checkout", $dev_branch
       Git.ensure_clean
       Git.pull_branches($dev_branch)
       commits.each do |commit|
-        unless system "git", "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", commit
-          system "git", "cherry-pick", "--abort"
-          system "git", "checkout", branch
+        unless Git.stream nil, "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", commit
+          Git.stream nil, "cherry-pick", "--abort"
+          Git.stream nil, "checkout", branch
           error "Cherry-pick failed"
         end
       end
       Git.push
-      system "git", "checkout", branch
+      Git.stream nil, "checkout", branch
       Git.ensure_clean
       commits.each do |commit|
         pr_number = get_pr_number("production", commit)
@@ -61,7 +61,7 @@ namespace :ustacking do
   task resolve: :before do |task, args|
     branches = get_unique_branches(args)
     branches.each do |branch|
-      system "git", "checkout", branch
+      Git.stream nil, "checkout", branch
       commits = Git.my_commits_between("production", branch, "austin")
       next if commits.empty?
       pr_numbers = []
@@ -135,7 +135,7 @@ namespace :ustacking do
 
     plan = commits.map { |commit| plan_stacked_entry(commit) }
     validate_stack_plan(plan.reject { |entry| already_in_base?(entry[:commit], base) })
-    base_sha = `git rev-parse #{base}`.strip
+    base_sha = Git.capture("rev-parse", base).strip
 
     info "Pushing #{plan.length} unique branch(es), each parented on #{base}"
     pr_numbers = []
@@ -166,12 +166,12 @@ namespace :ustacking do
 
   def cherry_pick_onto_base(entry, base, source_branch)
     tmp = "tmp/ustack/#{entry[:label].tr('/', '_')}-#{Time.now.to_i}"
-    error "Failed to create #{tmp}" unless system("git", "checkout", "-q", "-b", tmp, base)
-    picked = system("git", "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", entry[:commit])
-    sha = `git rev-parse HEAD`.strip
-    system "git", "cherry-pick", "--abort", out: File::NULL, err: File::NULL unless picked
-    system "git", "checkout", "-q", source_branch
-    system "git", "branch", "-D", tmp, out: File::NULL
+    error "Failed to create #{tmp}" unless Git.stream(nil, "checkout", "-q", "-b", tmp, base)
+    picked = Git.stream(nil, "cherry-pick", "--strategy=recursive", "-X", "theirs", "--empty=drop", entry[:commit])
+    sha = Git.capture("rev-parse", "HEAD").strip
+    Git.run(nil, "cherry-pick", "--abort", stderr: :discard) unless picked
+    Git.stream nil, "checkout", "-q", source_branch
+    Git.run(nil, "branch", "-D", tmp, stderr: :inherit)
     error "Cherry-pick failed for #{entry[:commit]} → #{entry[:branch]}" unless picked
     sha
   end
@@ -179,8 +179,8 @@ namespace :ustacking do
   # A fresh cherry-pick never shares a sha with the pushed one, so compare what matters: same tree
   # on the same parent. Anything else is a real change and gets pushed.
   def remote_matches_cherry_pick?(branch, sha)
-    return false unless system("git", "fetch", "origin", branch, out: File::NULL, err: File::NULL)
-    `git rev-parse FETCH_HEAD^{tree} FETCH_HEAD^`.strip == `git rev-parse #{sha}^{tree} #{sha}^`.strip
+    return false unless Git.ok?(nil, "fetch", "origin", branch, stderr: :discard)
+    Git.capture("rev-parse", "FETCH_HEAD^{tree}", "FETCH_HEAD^").strip == Git.capture("rev-parse", "#{sha}^{tree}", "#{sha}^").strip
   end
 
   def get_pr_number(_base, commit)
@@ -198,12 +198,12 @@ namespace :ustacking do
     error "No branches found" if branches.empty?
     Git.find_branches("tmp/ustack/test-").each do |tmp|
       info "Deleting temporary branch #{tmp}"
-      system "git", "branch", "-D", tmp
+      Git.stream nil, "branch", "-D", tmp
     end
     failed = []
     branches.each do |branch|
       Git.ensure_clean
-      system "git", "checkout", branch
+      Git.stream nil, "checkout", branch
       Git.ensure_clean
       cmd = "./gradlew classes"
       # check for microservices directory
@@ -213,8 +213,8 @@ namespace :ustacking do
       commits = Git.my_commits_between("production", branch, "austin")
       commits.each do |commit|
         tmp = "tmp/ustack/test-#{commit}"
-        system "git", "checkout", "-b", tmp, "production"
-        cherry = system "git cherry-pick -n #{commit}"
+        Git.stream nil, "checkout", "-b", tmp, "production"
+        cherry = Git.stream nil, "cherry-pick", "-n", commit
         if cherry
           info "Running #{cmd} on commit #{commit} in branch #{tmp}"
           if system(cmd)
@@ -227,9 +227,9 @@ namespace :ustacking do
           warning "Cherry-pick failed for commit #{commit} in branch #{tmp}"
           failed << commit
         end
-        system "git", "reset", "--hard", "production"
-        system "git", "checkout", branch
-        system "git", "branch", "-D", tmp
+        Git.stream nil, "reset", "--hard", "production"
+        Git.stream nil, "checkout", branch
+        Git.stream nil, "branch", "-D", tmp
       end
     end
     if failed.empty?
