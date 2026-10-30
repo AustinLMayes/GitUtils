@@ -16,8 +16,6 @@ TRAIN_ENABLED = ENV["GUTILS_NO_TRAIN"] != "true"
 #   true   — it did something, and `out` says what
 #   false  — the train ACCEPTED the command and nothing changed, or refused it; this PR only
 #   :down  — the daemon is not running, so every remaining PR in this loop will fail the same way
-AX_TRAIN_DOWN = 3
-AX_TRAIN_NO_CHANGE = 4
 
 def train(*args)
   argv = args.map(&:to_s)
@@ -26,18 +24,19 @@ def train(*args)
     return nil
   end
 
-  out = IO.popen(["ax", *argv], err: [:child, :out], &:read).to_s.strip
-  code = $?&.exitstatus
+  result = Ax.call(*argv, fail_open: false, stderr: :merge)
+  out = result.out.strip
+  code = result.status&.exitstatus
   case code
   when 0
     info out unless out.empty?
     true
-  when AX_TRAIN_NO_CHANGE
+  when Ax::TRAIN_NO_CHANGE
     # Accepted, and nothing moved. That is an answer, not a problem — `info`, not `warning`, or
     # every already-tracked PR in a stack reads as something going wrong.
     info out unless out.empty?
     false
-  when AX_TRAIN_DOWN
+  when Ax::TRAIN_UNREACHABLE
     warning out
     :down
   else
@@ -61,10 +60,10 @@ def assign_in_this_run?
 end
 
 def train_reviewers(pr_number)
-  out = IO.popen(["ax", "pr", "show", Git.repo_name_with_org, pr_number.to_s], err: File::NULL, &:read)
-  return nil unless $?&.success?
-  Array(JSON.parse(out)["intendedReviewers"])
-rescue JSON::ParserError, SystemCallError
+  result = Ax.call("pr", "show", Git.repo_name_with_org, pr_number.to_s, stderr: :discard)
+  return nil unless result&.ok?
+  Array(JSON.parse(result.out)["intendedReviewers"])
+rescue JSON::ParserError
   nil
 end
 
