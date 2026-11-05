@@ -47,7 +47,7 @@ namespace :br do
   def push_all(*branches, force: false)
     return if $dont_push
     delay = $delays_enabled ? [5, 25] : [0, 0]
-    branches = branches.shuffle
+    branches = skip_worktree_branches(branches).shuffle
     # never push production
     branches.delete("production")
     Git.push_branches *branches, ensure_exists: false, delay: delay, force: force
@@ -188,7 +188,7 @@ namespace :br do
       args.extras.shift
     end
     if args.extras.length > 0
-      branches = Git.find_branches_multi(args.extras)
+      branches = skip_worktree_branches(Git.find_branches_multi(args.extras))
     end
     branches.delete("austin/stage")
     Git.stream nil, "stash"
@@ -214,7 +214,7 @@ namespace :br do
       args.extras.shift
     end
     if args.extras.length > 0
-      branches = Git.find_branches_multi(args.extras)
+      branches = skip_worktree_branches(Git.find_branches_multi(args.extras))
     end
     pull_base unless dont_pull
     branches.each do |branch|

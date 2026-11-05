@@ -126,6 +126,13 @@ def get_non_stacked_branches(args)
   branches
 end
 
+def skip_worktree_branches(branches)
+  held = Git.capture("branch").lines.select { |line| line.start_with?("+") }.map { |line| line[1..].strip }
+  skipped = branches & held
+  warning "Skipping #{skipped.join(", ")}: checked out in another worktree" unless skipped.empty?
+  branches - skipped
+end
+
 Dir["#{File.dirname(__FILE__)}/components/*.rb"].each { |file| load file }
 
 

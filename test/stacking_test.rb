@@ -67,6 +67,27 @@ class StackingTest < Minitest::Test
     assert_equal "Fix message rendering", stack_source_target(" Fix message rendering ")
   end
 
+  def test_a_branch_another_worktree_holds_is_skipped_with_a_warning
+    Dir.mktmpdir do |dir|
+      Dir.chdir(dir) do
+        git = ->(*args) { Git.ok?(nil, *args) or raise "git #{args.join(" ")}" }
+        git.("init", "-q", "-b", "production")
+        git.("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
+        git.("branch", "austin/free")
+        git.("worktree", "add", "-q", "-b", "austin/held", "held")
+
+        kept = nil
+        out, = capture_io { kept = skip_worktree_branches(%w[production austin/free austin/held]) }
+        assert_equal %w[production austin/free], kept
+        assert_match "Skipping austin/held", out
+
+        out, = capture_io { kept = skip_worktree_branches(%w[production austin/free]) }
+        assert_equal %w[production austin/free], kept
+        assert_empty out
+      end
+    end
+  end
+
   def test_stack_sources_finds_the_source_commit_from_any_end
     Dir.mktmpdir do |dir|
       Dir.chdir(dir) do

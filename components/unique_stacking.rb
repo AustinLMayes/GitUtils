@@ -8,7 +8,7 @@ namespace :ustacking do
         branches = Git.find_branches_multi(args.extras)
       end
     end
-    branches
+    skip_worktree_branches(branches)
   end
 
   desc "Given the diff of the current branch, create pull requests for each commit in the diff"
