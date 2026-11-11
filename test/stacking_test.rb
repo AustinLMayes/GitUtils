@@ -124,11 +124,11 @@ class StackingTest < Minitest::Test
     end
     assert_match "No reviewers on #7,", out
     refute_match "#8", out
-    assert_match "fgutils 'stacking:assign[dev]'", out
+    assert_match "fgutils 'stacking:assign[game]'", out
   end
 
   def test_quiet_when_assign_runs_in_the_same_invocation
-    out = with_reviewers({ 7 => [] }, tasks: ["stacking:diff", "stacking:assign[dev]"]) do
+    out = with_reviewers({ 7 => [] }, tasks: ["stacking:diff", "stacking:assign[game]"]) do
       warn_unassigned([7], "stacking:assign", "austin/s/x")
     end
     assert_empty out

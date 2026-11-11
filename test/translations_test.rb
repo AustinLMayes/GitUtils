@@ -46,11 +46,11 @@ class TranslationsTest < Minitest::Test
     result
   end
 
-  def test_off_the_train_is_added_on_its_head_branch_and_given_dev
+  def test_off_the_train_is_added_on_its_head_branch_and_given_game
     fake_ax("ax: could not read #{REPO}#8947: #{REPO}#8947 is not in any train", 1)
     assert sweep
-    dev = Reviewers.expand_all(["dev"], org: "teamziax")
-    assert_equal ["pr show #{REPO} 8947", "pr add translations #{REPO} 8947", "pr assign #{REPO} 8947 #{dev.join(' ')}"], calls
+    game = Reviewers.expand_all(["game"], org: "teamziax")
+    assert_equal ["pr show #{REPO} 8947", "pr add translations #{REPO} 8947", "pr assign #{REPO} 8947 #{game.join(' ')}"], calls
   end
 
   def test_on_the_train_with_reviewers_is_left_alone

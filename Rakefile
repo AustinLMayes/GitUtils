@@ -81,7 +81,7 @@ def warn_unassigned(pr_numbers, assign_task, branch)
   return if !TRAIN_ENABLED || pr_numbers.empty? || assign_in_this_run?
   bare = pr_numbers.select { |n| train_reviewers(n)&.empty? }
   return if bare.empty?
-  warning "No reviewers on ##{bare.join(", #")}, so the train will pause it on `No reviewers assigned`. On #{branch}: fgutils '#{assign_task}[dev]'"
+  warning "No reviewers on ##{bare.join(", #")}, so the train will pause it on `No reviewers assigned`. On #{branch}: fgutils '#{assign_task}[game]'"
 end
 
 def determine_dev_branch

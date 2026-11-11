@@ -3,7 +3,7 @@ require "json"
 # Never prs:submit these. It pushes `translations`, a bot-owned teamziax branch, and its
 # `gh pr edit` renames the PR to the bot's commit subject and blanks the body.
 namespace :translations do
-    desc "Approve parked Actions runs on bot Translations Update PRs, and put each on the train with dev reviewers"
+    desc "Approve parked Actions runs on bot Translations Update PRs, and put each on the train with game reviewers"
     task :sweep do
         prs = translations_bot_prs
         info "#{prs.length} open bot Translations Update PR(s)"
@@ -43,7 +43,7 @@ namespace :translations do
         end
         return true unless reviewers.empty?
 
-        train("pr", "assign", repo, number, *Reviewers.expand_all(["dev"], org: repo.split("/").first)) == true
+        train("pr", "assign", repo, number, *Reviewers.expand_all(["game"], org: repo.split("/").first)) == true
     end
 
     def translations_train_entry(repo, number)
