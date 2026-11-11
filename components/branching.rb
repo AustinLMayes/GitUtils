@@ -65,7 +65,7 @@ namespace :br do
     # anchor is also what keeps the stacks/austin/* PR heads out.
     skipped = branches.reject { |branch| branch.start_with?("austin/") }
     warning "Refusing to force push #{skipped.join(", ")}" unless skipped.empty?
-    push_all *(branches - skipped), force: true
+    push_all *skip_unseen_remote_heads(branches - skipped), force: true
   end
 
   desc "Pull all of the base branches"
@@ -191,6 +191,7 @@ namespace :br do
       branches = skip_worktree_branches(Git.find_branches_multi(args.extras))
     end
     branches.delete("austin/stage")
+    branches = skip_unseen_remote_heads(branches)
     Git.stream nil, "stash"
     pull_base unless dont_pull
     branches.each do |branch|

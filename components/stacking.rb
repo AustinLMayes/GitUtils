@@ -198,7 +198,7 @@ namespace :stacking do
   task diff: :before do |task, args|
     current = Git.current_branch
     Git.ensure_clean
-    branches = get_branches(args)
+    branches = skip_unseen_remote_heads(get_branches(args))
     branches.each do |branch|
       Git.stream nil, "checkout", branch
       Git.ensure_clean

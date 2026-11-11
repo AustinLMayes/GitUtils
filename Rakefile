@@ -133,6 +133,19 @@ def skip_worktree_branches(branches)
   branches - skipped
 end
 
+def skip_unseen_remote_heads(branches)
+  return branches if branches.empty?
+  heads = Git.capture("ls-remote", "--heads", "origin", *branches.map { |branch| "refs/heads/#{branch}" }).lines.to_h { |line| line.split.reverse }
+  skipped = branches.reject do |branch|
+    remote = heads["refs/heads/#{branch}"]
+    # the reflog half is what lets a rebased or amended branch through: its old head is no longer an ancestor
+    remote.nil? || Git.ok?(nil, "merge-base", "--is-ancestor", remote, branch) ||
+      Git.out(nil, "log", "-g", "--format=%H", "refs/heads/#{branch}").to_s.split.include?(remote)
+  end
+  warning "Refusing to force push #{skipped.join(", ")}: origin has a head the local branch never held. Reset onto origin first" unless skipped.empty?
+  branches - skipped
+end
+
 Dir["#{File.dirname(__FILE__)}/components/*.rb"].each { |file| load file }
 
 

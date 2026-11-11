@@ -14,7 +14,7 @@ namespace :ustacking do
   desc "Given the diff of the current branch, create pull requests for each commit in the diff"
   task diff: :before do |task, args|
     Git.ensure_clean
-    branches = get_unique_branches(args)
+    branches = skip_unseen_remote_heads(get_unique_branches(args))
     branches.each do |branch|
       Git.stream nil, "checkout", branch
       Git.ensure_clean

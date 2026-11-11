@@ -34,7 +34,7 @@ namespace :prs do
 
     desc "Push the current branch (or each branch in args), open a draft PR from its last commit, and register it with the train"
     task submit: :before do |task, args|
-        branches = get_non_stacked_branches(args)
+        branches = skip_unseen_remote_heads(get_non_stacked_branches(args))
         Git.act_on_branches *branches, ensure_exists: true do |branch|
             Git.push(force: true)
             res = make_prs(Git.last_commit_message.values.join("\n"))
