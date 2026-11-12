@@ -13,6 +13,7 @@ namespace :ustacking do
 
   desc "Given the diff of the current branch, create pull requests for each commit in the diff"
   task diff: :before do |task, args|
+    current = Git.current_branch
     Git.ensure_clean
     branches = skip_unseen_remote_heads(get_unique_branches(args))
     branches.each do |branch|
@@ -20,8 +21,8 @@ namespace :ustacking do
       Git.ensure_clean
       Git.push(force: true)
       create_unique_stacked_prs("production", branch)
-      Git.stream nil, "checkout", branch
     end
+    Git.stream nil, "checkout", current
   end
 
   desc "Request review for every commit on the current branch (or the branches specified as arguments)"

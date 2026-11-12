@@ -88,6 +88,30 @@ class StackingTest < Minitest::Test
     end
   end
 
+  def test_a_unique_diff_ends_on_the_branch_it_started_on
+    Dir.mktmpdir do |dir|
+      Dir.chdir(dir) do
+        git = ->(*args) { Git.ok?(nil, *args) or raise "git #{args.join(" ")}" }
+        git.("init", "-q", "-b", "production")
+        git.("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
+        git.("branch", "austin/u/a")
+        git.("branch", "austin/u/b")
+        git.("checkout", "-q", "-b", "austin/start")
+
+        diffed = []
+        capture_io do
+          Git.stub(:push, true) do
+            TOPLEVEL_BINDING.receiver.stub(:create_unique_stacked_prs, ->(_base, branch) { diffed << branch }) do
+              Rake::Task["ustacking:diff"].execute(Rake::TaskArguments.new([], ["all"]))
+            end
+          end
+        end
+        assert_equal %w[austin/u/a austin/u/b], diffed
+        assert_equal "austin/start", Git.current_branch
+      end
+    end
+  end
+
   def test_stack_sources_finds_the_source_commit_from_any_end
     Dir.mktmpdir do |dir|
       Dir.chdir(dir) do
